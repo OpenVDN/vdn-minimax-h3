@@ -160,6 +160,54 @@ We exclude model loading, warm-up, VAE decoding, and MP4 encoding. For a live se
 we recommend running the text prompt rewriter, VAE decoding, and MP4 conversion on
 separate machines, so the eight GPUs only denoise.
 
+### Reuse an assembled model for multiple renders
+
+`infer_ulysses.py` can consume a finite JSONL request queue without rebuilding,
+re-merging, or re-quantizing the transformer between renders. Each non-empty row must
+set a distinct `prompt_file` and `out`; it may override the other `render.*` fields
+except `warmup_steps`:
+
+```json
+{"prompt_file":"prompts/first.pt","out":"results/first.mp4","seed":42}
+{"prompt_file":"prompts/second.pt","out":"results/second.mp4","seed":43}
+```
+
+A ready-to-edit queue is available at `examples/requests.jsonl`.
+
+Launch the normal Ulysses command with
+`worker.requests_file=requests.jsonl`. On GPUs that cannot hold the transformer and
+both decoders together, also set `worker.decoder_cpu_offload=true`. Rank 0 then moves
+the already-assembled transformer to CPU for decoding and restores it afterward; the
+other ranks keep their transformer replicas resident. The per-output inference record
+reports request latency and both swap times separately.
+
+By default the complete transformer is swapped. If memory measurements show that only
+part of it must move, `worker.transformer_cpu_offload_blocks=N` limits swapping to the
+last `N` transformer blocks and reduces PCIe traffic. Start conservatively: too small a
+value can run out of memory during VAE decoding.
+
+Compact FP8 workers can additionally set `precision.fp8.keep_original=false` to drop
+the replaced BF16 Linear weights. This makes FP8 conversion non-reversible within the
+process, but substantially reduces resident memory and PCIe traffic. The default stays
+`true`, preserving the existing `revert_fp8` behavior.
+
+This mode expects pre-encoded prompt files. For an online deployment, keep prompt
+encoding and, where possible, VAE decoding outside the denoiser worker.
+
+Reference measurement by **wuyaole** on 8× RTX PRO 5000 72GB, using the released
+8-NFE checkpoint at 1344×768 and 345 frames:
+
+| rank-0 decode strategy | warm request | denoise | transformer swap |
+|---|---:|---:|---:|
+| full transformer CPU offload | 194.60 s | 91.11 s | 44.06 s |
+| trailing 25 blocks, second consecutive request | 179.70 s | 91.29 s | 28.85 s |
+| trailing 20 blocks | 170.49 s | 90.82 s | 19.61 s |
+
+The numbers include VAE decoding and MP4 encoding but exclude the one-time model
+assembly and warm-up. Treat the block count as hardware- and workload-specific; the
+25-block result was verified on two consecutive requests, while the 20-block row is a
+single completed boundary run.
+
 ## Training Recipe
 
 VDN-H3 is trained in three stages based on the frozen dense model, each starting from

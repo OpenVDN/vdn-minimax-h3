@@ -263,19 +263,20 @@ class Fp8Linear(nn.Module):
             self.register_buffer("weight_fp8",
                                  (weight / scale.to(weight.dtype)).to(FP8_DTYPE))
             self.register_buffer("weight_scale", scale.reshape(1, -1).contiguous())
+        self._bias = linear.bias
         self.original = linear
 
     @property
     def bias(self):
-        return self.original.bias
+        return self.original.bias if self.original is not None else self._bias
 
     def forward_quantized(self, x_fp8, x_scale, out_dtype=torch.bfloat16):
         """[M, K] fp8 rows and their scales ([M, 1] rowwise / [1, 1] per-tensor) -> [M, N]."""
         out = torch._scaled_mm(x_fp8, self.weight_fp8.t(),
                                scale_a=x_scale, scale_b=self.weight_scale,
                                out_dtype=out_dtype, use_fast_accum=True)
-        if self.original.bias is not None:
-            out = out + self.original.bias
+        if self.bias is not None:
+            out = out + self.bias
         return out
 
     def forward(self, x):
@@ -297,7 +298,8 @@ def _blocks_to_skip(model, skip_end_blocks):
     return keep
 
 
-def convert_linear_to_fp8(model, min_width=MIN_WIDTH, skip_end_blocks=SKIP_END_BLOCKS):
+def convert_linear_to_fp8(model, min_width=MIN_WIDTH, skip_end_blocks=SKIP_END_BLOCKS,
+                          keep_original=True):
     """Swap the wide Linears for fp8 ones. Returns a handle to pass to `revert_fp8`.
 
     Call it AFTER any LoRA merge -- the merger writes into `Linear.weight`, and this
@@ -306,7 +308,11 @@ def convert_linear_to_fp8(model, min_width=MIN_WIDTH, skip_end_blocks=SKIP_END_B
     """
     skip = _blocks_to_skip(model, skip_end_blocks)
     swapped = []
-    for parent in list(model.modules()):
+    # Keep only containers, not a materialized list of every original Linear.
+    # Otherwise compact mode cannot free replaced BF16 weights until the full walk ends.
+    parents = [m for m in model.modules()
+               if any(isinstance(c, nn.Linear) for c in m.children())]
+    for parent in parents:
         for name, child in list(parent.named_children()):
             if not isinstance(child, nn.Linear):
                 continue
@@ -314,8 +320,21 @@ def convert_linear_to_fp8(model, min_width=MIN_WIDTH, skip_end_blocks=SKIP_END_B
                 continue
             if id(child) in skip:
                 continue
-            setattr(parent, name, Fp8Linear(child).to(child.weight.device))
-            swapped.append((parent, name, child))
+            target_device = child.weight.device
+            if not keep_original and target_device.type == "cuda":
+                # Free the BF16 layer before allocating its FP8 replacement. This keeps
+                # peak memory below the resident hybrid model on 72 GB cards.
+                child = child.to("cpu")
+                torch.cuda.empty_cache()
+                replacement = Fp8Linear(child)
+                replacement.original = None
+                replacement = replacement.to(target_device)
+            else:
+                replacement = Fp8Linear(child).to(target_device)
+                if not keep_original:
+                    replacement.original = None
+            setattr(parent, name, replacement)
+            swapped.append((parent, name, child if keep_original else None))
     return swapped
 
 
