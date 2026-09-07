@@ -1,6 +1,6 @@
 # Video DeltaNet: Hybrid Attention to Speed Up Video Models with Near-Lossless Quality
 
-[[`Blog`](https://openvdn.github.io/)] [[`🤗 HuggingFace`](https://huggingface.co/OpenVDN/vdn-minimax-h3)] [[`License`](#license)]
+[[`Blog`](https://openvdn.github.io/)] [[`Code`](https://github.com/OpenVDN/vdn-minimax-h3)] [[`🤗 Weights`](https://huggingface.co/OpenVDN/vdn-minimax-h3)] [[`License`](#license)]
 
 We release **VDN-Minimax-H3** (**VDN-H3**), a hybrid-attention model that
 generates video faster than it plays, powered by
@@ -32,6 +32,12 @@ We present some samples of generated videos here:
 <td width="33%"><video src="https://github.com/user-attachments/assets/06dd0699-7047-4b25-bcb7-8b541a4e2718" controls muted></video></td>
 </tr>
 </table>
+
+## News
+
+- **September 6, 2026:** We released the [VDN-H3 blog](https://openvdn.github.io/),
+  [training and inference code](https://github.com/OpenVDN/vdn-minimax-h3), and
+  [model weights](https://huggingface.co/OpenVDN/vdn-minimax-h3).
 
 ## Set up environment
 
@@ -233,7 +239,11 @@ from its released transformer weights. We also thank
 [Diffusers](https://github.com/huggingface/diffusers),
 [FlashAttention](https://github.com/Dao-AILab/flash-attention), and
 [Triton](https://github.com/triton-lang/triton), on which the optimized inference path
-is built.
+is built. We thank [Kernel Design Agents (KDA)](https://github.com/mit-han-lab/kernel-design-agents)
+for kernel design support. We also thank
+[Flash Linear Attention (FLA)](https://github.com/fla-org/flash-linear-attention) and
+[FlexAttention](https://pytorch.org/docs/stable/nn.attention.flex_attention.html) for
+their open-source attention implementations.
 
 ## BibTeX
 
