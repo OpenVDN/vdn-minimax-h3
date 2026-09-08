@@ -25,14 +25,14 @@ from src.config.inference import (
     validate_kernels,
     validate_parallel,
 )
-from src.inference.assemble import (
+from src.inference.utils.assemble import (
     build_inference_model,
     latents_path,
     render_record,
     write_json,
 )
-from src.inference.render import decode_and_save, generate_latents, load_text
-from src.inference.ulysses import init_ulysses, install_ulysses
+from src.inference.render import decode_and_save, generate_latents, load_prompt
+from src.inference.utils.ulysses import init_ulysses, install_ulysses
 
 
 def main():
@@ -71,7 +71,10 @@ def main():
             flush=True,
         )
 
-    prompt_embeds, text_token_tags = load_text(cfg.render.prompt_file, str(device))
+    prompt_embeds, text_token_tags, conditions = load_prompt(cfg.render.prompt_file, str(device))
+    if conditions:
+        raise ValueError("keyframe conditioning (i2va / fl2va) is only supported by "
+                         "infer.py; the Ulysses path would have silently ignored it")
     runtime.barrier()
     torch.cuda.synchronize(device)
     model_setup_seconds = time.perf_counter() - process_started

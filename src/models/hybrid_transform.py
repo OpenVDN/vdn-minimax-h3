@@ -58,19 +58,15 @@ def set_teacher_mode(model, enabled: bool):
 
 def set_softmax_backend(model, backend: str) -> str:
     """Runtime window-softmax implementation (config ``kernels.softmax_backend``):
-    ``auto`` (decomposed on sm100, flex elsewhere) | ``flex`` (BlockMask, the sm90
-    kernel) | ``decomposed`` (the mask as a union of dense calls, sm100) | ``ref`` (eager
-    reference). Sets every hybrid layer and the decomposition latch; returns what was
-    resolved. Never part of a checkpoint's spec."""
-    from src.models.softmax_attention.decomposed import (resolve_softmax_backend,
-                                                          set_decomposition)
+    ``auto`` (decomposed on every CUDA device; see decomposed.resolve_softmax_backend) |
+    ``flex`` (BlockMask, what training uses) | ``decomposed`` (the mask as a union of
+    dense calls) | ``ref`` (eager reference). Writes the resolved choice onto every
+    hybrid layer and returns it. Never part of a checkpoint's spec."""
+    from src.models.softmax_attention.decomposed import resolve_softmax_backend
 
     resolved = resolve_softmax_backend(backend)
-
     for attn in iter_hybrids(model):
         attn.softmax_impl = resolved
-
-    set_decomposition(resolved == "decomposed")
     return resolved
 
 

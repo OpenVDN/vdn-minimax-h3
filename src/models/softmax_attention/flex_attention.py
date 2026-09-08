@@ -177,15 +177,8 @@ def _warn_inference_flex():
             return
     except Exception:
         return
-    from src.models.softmax_attention.decomposed import _STATE, decomposition_enabled
-    msgs = []
-    if _STATE.get("disabled"):
-        msgs.append("the decomposition latched OFF earlier in this process (reason "
-                    "printed above) -- this fallback is expected, just slower")
-    elif not decomposition_enabled():
-        msgs.append("kernels.softmax_backend resolved to flex (set_softmax_backend was "
-                    "not called with auto/decomposed) -- the decomposition runs this "
-                    "window faster than even CLC-scheduled flex")
+    msgs = ["kernels.softmax_backend is flex here; auto picks the decomposition, which "
+            "runs this window faster than even CLC-scheduled flex"]
     if os.environ.get("FA_CLC") != "1":
         msgs.append("FA_CLC=1 is not set -- flex is running the STATIC block-sparse "
                     "schedule, which is noticeably slower on sm100")

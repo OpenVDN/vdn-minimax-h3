@@ -1,4 +1,4 @@
-"""Render glue shared by every inference entrypoint: load_models, load_text,
+"""Render glue shared by every inference entrypoint: load_models, load_prompt,
 generate_latents (the denoising loop + packed layout), and decode_and_save with its
 atomic .partial.mp4 write.
 """
@@ -12,7 +12,9 @@ from diffusers import (AutoencoderKLMiniMaxH3, AutoencoderKLMiniMaxH3Audio,
 from diffusers.modular_pipelines.minimax_h3.before_denoise import (
     MiniMaxH3PrepareLayoutStep, patchify_video_latents)
 from diffusers.modular_pipelines.minimax_h3.modular_pipeline import (
-    align_num_frames, audio_latent_num_frames, video_latent_num_frames)
+    MINIMAX_H3_AUDIO_CHANNELS as AUDIO_CHANNELS, MINIMAX_H3_AUDIO_TAG as AUDIO_TAG,
+    MINIMAX_H3_FPS as FPS, MINIMAX_H3_VIDEO_TAG as VIDEO_TAG, align_num_frames,
+    audio_latent_num_frames, video_latent_num_frames)
 from diffusers.utils.export_utils import encode_video
 
 from src.models.sequence_layout import layout_from_indices
@@ -23,11 +25,13 @@ from src.models.hybrid_transform import iter_hybrids, set_layout
 # the dense `checkpoint=null` render load from here unless the config names another root
 # (`vae_source` / `base_source`). Relative paths resolve against the repo root, not cwd.
 DEFAULT_MODEL_ROOT = H3_BASE
-PIXEL_MEAN, PIXEL_STD = (0.485, 0.456, 0.406), (0.229, 0.224, 0.225)
+# The production canvas, 768x1344, through the 16x spatial VAE.
 LATENT_H, LATENT_W = 48, 84
-PATCH_SIZE = (1, 2, 2)
-AUDIO_CHANNELS = 2
-VIDEO_TAG, TEXT_TAG, AUDIO_TAG = 0, 1, 2
+# Mirrors of MiniMaxH3ModularPipeline.pixel_mean / pixel_std / keyframe_noise_aug: those
+# are properties of an assembled pipeline, which the inlined blocks below never build.
+# 0.999 is the t the fl2va keyframes are held at, just short of clean.
+PIXEL_MEAN, PIXEL_STD = (0.485, 0.456, 0.406), (0.229, 0.224, 0.225)
+KEYFRAME_NOISE_AUG = 0.999
 
 
 def load_models(model_root: str, device: str, vae_source: str = None,
@@ -52,27 +56,47 @@ def load_models(model_root: str, device: str, vae_source: str = None,
     return transformer, vae, audio_vae
 
 
-
-def load_text(prompt_file: str, device: str):
-    """A cached prompt from encode_prompt.py (prompts/*.pt)."""
+def load_prompt(prompt_file: str, device: str):
+    """A prompt cache from encode_prompt.py (t2va) or encode_keyframes.py (i2va / fl2va);
+    both carry prompt_embeds and text_token_tags. Returns (prompt_embeds,
+    text_token_tags, conditions); `conditions` is (keyframe_anchors, condition_latents)
+    for a keyframe cache, else None."""
     text = torch.load(prompt_file, map_location="cpu", weights_only=True)
-    return text["prompt_embeds"].to(device, torch.bfloat16), text["text_token_tags"]
+    conditions = None
+    if text.get("keyframe_anchors"):
+        conditions = (tuple(text["keyframe_anchors"]),
+                      [c.to(device, torch.float32) for c in text["condition_latents"]])
+    return text["prompt_embeds"].to(device, torch.bfloat16), text["text_token_tags"], conditions
 
 
 @torch.no_grad()
 def generate_latents(transformer, prompt_embeds, text_token_tags, num_frames, num_steps, seed, device,
-                     video_shift=12.0, audio_shift=3.0, runtime=None, step_seconds=None):
+                     video_shift=12.0, audio_shift=3.0, runtime=None, step_seconds=None,
+                     conditions=None):
     """The sampler. `runtime` (Ulysses) adds a barrier before and after the loop so every
     rank enters and leaves together; `step_seconds`, if a list, receives the
-    device-synchronised wall time of every NFE (for the timing log and the record)."""
+    device-synchronised wall time of every NFE (for the timing log and the record).
+
+    `conditions` = (keyframe_anchors, condition_latents) from load_prompt turns the
+    request into i2va / fl2va: the layout reserves one frame of conditioning rows per
+    keyframe between the text and the audio (`[text | keyframes | audio | video]`), the
+    anchors are noised to t = 0.999 and pinned there, and only the generated rows are
+    ever stepped -- the diffusers fl2va blocks, inlined. On a hybrid model the
+    conditioning rows fall outside the layout's video span, i.e. they are attended like
+    text and audio: dense in both directions by the window softmax and absent from the
+    linear scan."""
     num_frames = align_num_frames(num_frames, 17, 5)
     num_latent_frames = video_latent_num_frames(num_frames, 17, 5)
     num_audio_latents = audio_latent_num_frames(num_frames)
+    anchors, condition_latents = conditions if conditions else ((), [])
+    patch = tuple(transformer.config.patch_size)                    # (1, 2, 2)
+    channels = transformer.config.in_channels                       # 24
+    frame_h, frame_w = LATENT_H // patch[1], LATENT_W // patch[2]
 
-    position_ids, token_tags, video_indices, audio_indices, text_indices, _, _ = (
+    position_ids, token_tags, video_indices, audio_indices, text_indices, num_condition_rows, _ = (
         MiniMaxH3PrepareLayoutStep.build_packed_sequence(
             text_token_tags, num_latent_frames, LATENT_H, LATENT_W, num_audio_latents,
-            PATCH_SIZE, AUDIO_CHANNELS, AUDIO_TAG, VIDEO_TAG, keyframe_anchors=(),
+            patch, AUDIO_CHANNELS, AUDIO_TAG, VIDEO_TAG, keyframe_anchors=anchors,
         )
     )
     position_ids, token_tags = position_ids.to(device), token_tags.to(device)
@@ -86,10 +110,8 @@ def generate_latents(transformer, prompt_embeds, text_token_tags, num_frames, nu
         # frame_size and text_indices unconditionally: carrying them is free, and only
         # their consumers are gated (short_conv / text_state).
         set_layout(transformer, layout_from_indices(
-            video_indices, num_latent_frames,
-            (LATENT_H // PATCH_SIZE[1]) * (LATENT_W // PATCH_SIZE[2]),
-            seq_len=position_ids.shape[0],
-            frame_size=(LATENT_H // PATCH_SIZE[1], LATENT_W // PATCH_SIZE[2]),
+            video_indices[num_condition_rows:], num_latent_frames, frame_h * frame_w,
+            seq_len=position_ids.shape[0], frame_size=(frame_h, frame_w),
             text_indices=text_indices,
         ))
 
@@ -99,9 +121,21 @@ def generate_latents(transformer, prompt_embeds, text_token_tags, num_frames, nu
     audio_scheduler.set_timesteps(num_steps, device=device)
 
     generator = torch.Generator(device).manual_seed(seed)
-    latents = torch.randn((1, 24, num_latent_frames, LATENT_H, LATENT_W),
+    # The conditioning noise is drawn first, one draw per keyframe, before the generated
+    # rows' noise (MiniMaxH3PrepareConditionLatentsStep's order).
+    condition_rows = []
+    for condition in condition_latents:
+        noise = torch.randn(condition.shape, generator=generator, device=device, dtype=torch.float32)
+        noised = scheduler.scale_noise(condition, KEYFRAME_NOISE_AUG, noise)
+        condition_rows.append(patchify_video_latents(noised, patch))
+    latents = torch.randn((1, channels, num_latent_frames, LATENT_H, LATENT_W),
                           generator=generator, device=device, dtype=torch.float32)
-    video_rows = patchify_video_latents(latents, PATCH_SIZE)
+    video_rows = patchify_video_latents(latents, patch)
+    if condition_rows:
+        video_rows = torch.cat(condition_rows + [video_rows])
+        if video_rows.shape[0] != video_indices.numel():
+            raise ValueError(f"{video_rows.shape[0]} video rows (with conditioning) != "
+                             f"{video_indices.numel()} layout rows")
     audio_rows = torch.randn((num_audio_latents * AUDIO_CHANNELS, 32),
                              generator=generator, device=device, dtype=torch.float32)
 
@@ -113,6 +147,8 @@ def generate_latents(transformer, prompt_embeds, text_token_tags, num_frames, nu
     for t, audio_t in zip(scheduler.timesteps, audio_scheduler.timesteps):
         step_started = time.perf_counter()
         row_timesteps = torch.full((seq_len,), float(t), dtype=torch.float32, device=device)
+        if num_condition_rows:
+            row_timesteps[video_indices[:num_condition_rows]] = max(float(t), KEYFRAME_NOISE_AUG)
         row_timesteps[audio_indices] = float(audio_t)
         timestep, timestep_indices = torch.unique(row_timesteps, sorted=True, return_inverse=True)
         noise_pred, audio_noise_pred = transformer(
@@ -128,7 +164,10 @@ def generate_latents(transformer, prompt_embeds, text_token_tags, num_frames, nu
             text_indices=text_indices,
             return_dict=False,
         )
-        video_rows = scheduler.step(noise_pred[0].float(), t, video_rows, return_dict=False)[0]
+        # only the generated rows step; the anchors ride through unchanged
+        video_rows[num_condition_rows:] = scheduler.step(
+            noise_pred[0, num_condition_rows:].float(), t, video_rows[num_condition_rows:],
+            return_dict=False)[0]
         audio_rows = audio_scheduler.step(audio_noise_pred[0].float(), audio_t, audio_rows, return_dict=False)[0]
 
         if step_seconds is not None:
@@ -140,9 +179,10 @@ def generate_latents(transformer, prompt_embeds, text_token_tags, num_frames, nu
         runtime.barrier()
 
     # Unpatchify (the AfterDenoise step's reshape) and unpack the channel-major audio rows.
-    rows = video_rows.reshape(-1, num_latent_frames, LATENT_H // 2, LATENT_W // 2, 24, 1, 2, 2)
+    video_rows = video_rows[num_condition_rows:]
+    rows = video_rows.reshape(-1, num_latent_frames, frame_h, frame_w, channels, *patch)
     rows = rows.permute(0, 4, 1, 5, 2, 6, 3, 7)
-    latents = rows.reshape(-1, 24, num_latent_frames, LATENT_H, LATENT_W).contiguous()
+    latents = rows.reshape(-1, channels, num_latent_frames, LATENT_H, LATENT_W).contiguous()
     audio_latents = audio_rows.reshape(AUDIO_CHANNELS, num_audio_latents, 32).permute(0, 2, 1).contiguous()
     return latents, audio_latents
 
@@ -174,7 +214,7 @@ def decode_and_save(latents, audio_latents, vae, audio_vae, out_path: str, devic
     # output format". Same directory either way, which is what os.replace needs.
     stem, ext = os.path.splitext(out_path)
     partial_path = f"{stem}.partial{ext}"
-    encode_video(frames, fps=24, output_path=partial_path,
+    encode_video(frames, fps=FPS, output_path=partial_path,
                  audio=audio.cpu(), audio_sample_rate=audio_vae.config.sampling_rate)
     os.replace(partial_path, out_path)
     print(f"wrote {out_path}", flush=True)

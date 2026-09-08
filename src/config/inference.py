@@ -6,24 +6,22 @@ error, not a warning.
 
 Every knob is a field here (YAML + dotlist); nothing on the inference path reads an
 environment variable (FA_CLC is flash-attn's own). Arch-dependent choices resolve at
-the setter, not the config: `softmax_backend: auto` is the decomposed window kernel
-on sm100 and flex on sm90, fp8 scale granularity follows the capability -- one YAML
-for both clusters."""
+the setter, not the config: `softmax_backend: auto` is the decomposed window kernel on
+any CUDA device, fp8 scale granularity follows the capability -- one YAML for both
+architectures."""
 from dataclasses import asdict, dataclass, field
 from typing import Any, Dict, List, Optional
 
 from omegaconf import MISSING, OmegaConf
 
 from src.config.common import KernelsConfig
-
-# Mirror of decomposed.SOFTMAX_BACKENDS so a typo dies before a 33B model loads.
-SOFTMAX_BACKENDS = ("auto", "flex", "decomposed", "ref")
+from src.models.softmax_attention.decomposed import SOFTMAX_BACKENDS
 
 
 @dataclass
 class InferenceKernels(KernelsConfig):
     # softmax_backend (inherited): auto | flex | decomposed | ref -- WHICH window-softmax
-    # kernel. auto = decomposed on sm100, flex on sm90 (hybrid_transform.set_softmax_backend).
+    # kernel. auto = decomposed on every CUDA device (hybrid_transform.set_softmax_backend).
     #
     # inference_kernels: set_inference_mode(model, True) -- the forward-only kernel set,
     # one switch, same arithmetic:

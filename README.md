@@ -35,6 +35,7 @@ We present some samples of generated videos here:
 
 ## News
 
+- **September 8, 2026:** We support I2VA and FL2VA now with the same checkpoint.
 - **September 6, 2026:** We released the [VDN-H3 blog](https://openvdn.github.io/),
   [training and inference code](https://github.com/OpenVDN/vdn-minimax-h3), and
   [model weights](https://huggingface.co/OpenVDN/vdn-minimax-h3).
@@ -128,6 +129,28 @@ We strongly recommend rewriting it first using
 or the official
 [prompt-writing skills](https://github.com/MiniMax-AI/MiniMax-H3/tree/main/skills)
 before encoding it. This can greatly improve the generated video quality.
+
+### Start from keyframes (FL2VA)
+
+The same checkpoints also generate from keyframes. Encode the prompt together with a
+first and a last keyframe; the encoder puts the images on the 768-short-edge canvas,
+runs them through the Qwen3-VL VLM alongside the prompt, and VAE-encodes the
+conditioning latents into the same prompt file:
+
+```bash
+python src/inference/encode_keyframes.py --prompt "..." \
+  --first first.png --last last.png --out prompts/mine_fl2va.pt
+
+python src/inference/infer.py \
+  --config configs/inference/8nfe_tuned_fp8.yaml \
+  checkpoint=ckpts/stage-dmd-step-250 \
+  render.prompt_file=prompts/mine_fl2va.pt \
+  render.out=results/mine_fl2va.mp4
+```
+
+The keyframes are held at the diffusers `fl2va` conditioning level throughout the
+denoising loop, and only the generated frames are stepped. Keyframe conditioning is
+supported on the single-GPU entrypoint; the multi-GPU Ulysses scripts are T2VA only.
 
 ### Choosing an inference configuration
 

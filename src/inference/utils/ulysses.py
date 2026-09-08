@@ -37,7 +37,7 @@ from src.models.softmax_attention import (
     window_softmax_reference,
 )
 from src.models.softmax_attention.kernels import apply_softmax_gate
-from src.inference.ulysses_runtime import (  # noqa: F401 -- re-exported
+from src.inference.utils.ulysses_runtime import (  # noqa: F401 -- re-exported
     UlyssesRuntime,
     balanced_splits,
     init_ulysses,
@@ -46,23 +46,14 @@ from src.inference.ulysses_runtime import (  # noqa: F401 -- re-exported
 
 
 def _window_softmax_branch(self, query, key, value, layout, bounds, scale):
-    """Rank-local window softmax: the decomposition gate (kernels.softmax_backend =
-    decomposed / auto on sm100, latched by set_softmax_backend) with flex as fallback
-    -- the same latch hybrid_attention uses. The decomposition is head-count-agnostic,
-    so Ulysses shards ([T, heads_per_rank, d] strided views of the packed buffer) go
-    through unchanged."""
-    if self.inference_mode:
-        from src.models.softmax_attention.decomposed import (
-            decomposition_enabled, mark_decomposition_broken,
-            window_softmax_decomposed)
-        if decomposition_enabled():
-            try:
-                return window_softmax_decomposed(
-                    query, key, value, layout, bounds, scale,
-                    anchor_frames=self.anchor_frames)
-            except Exception as exc:  # noqa: BLE001 -- latch, never die
-                mark_decomposition_broken(
-                    f"{type(exc).__name__}: {str(exc).splitlines()[0][:140]}")
+    """Rank-local window softmax: the same kernel choice as HybridAttention._window_kernel
+    (kernels.softmax_backend, inference-only decomposition). The decomposition is
+    head-count-agnostic, so Ulysses shards ([T, heads_per_rank, d] strided views of
+    the packed buffer) go through unchanged."""
+    if self._window_kernel(self.inference_mode, query.is_cuda) == "decomposed":
+        from src.models.softmax_attention.decomposed import window_softmax_decomposed
+        return window_softmax_decomposed(query, key, value, layout, bounds, scale,
+                                         anchor_frames=self.anchor_frames)
     block_mask = build_window_block_mask(
         layout, bounds, value.device, anchor_frames=self.anchor_frames
     )

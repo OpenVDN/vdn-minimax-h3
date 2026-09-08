@@ -24,14 +24,13 @@ import torch
 
 from src.checkpoints import checkpoint_head_sha256, load_checkpoint
 from src.config import resolved_dict
-from src.inference.lora import load_external_lora, merge_lora_state
+from src.inference.utils.lora import load_external_lora, merge_lora_state
 from src.inference.render import DEFAULT_MODEL_ROOT, load_models
 from src.paths import resolve_weights
 from src.models.factory import load_model_weights
 from src.models.hybrid_transform import (apply_hybrid_attention_transform, iter_hybrids,
                                          set_inference_mode, set_softmax_backend)
 from src.models.ops.fp8_linear import convert_linear_to_fp8
-from src.models.softmax_attention.decomposed import decomposition_state
 from src.models.softmax_attention.flex_attention import _FLEX_CACHE
 
 # Semantic knobs an ablation may touch, and where they live. Anything else is refused.
@@ -166,7 +165,7 @@ def render_record(cfg, model: InferenceModel) -> Dict[str, Any]:
         "external_loras": model.external_loras,
         "fp8_linears": model.fp8_linears,
         "flex_backend": flex_latch_state(),
-        "softmax_backend": {"resolved": model.softmax_backend, **decomposition_state()},
+        "softmax_backend": {"resolved": model.softmax_backend},
         "merged_lora_pairs": model.merged_lora_pairs,
     }
 
