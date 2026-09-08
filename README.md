@@ -130,22 +130,43 @@ or the official
 [prompt-writing skills](https://github.com/MiniMax-AI/MiniMax-H3/tree/main/skills)
 before encoding it. This can greatly improve the generated video quality.
 
-### Start from keyframes (FL2VA)
+### Image-to-Video-Audio (I2VA) and First-Last-to-Video-Audio (FL2VA)
 
-The same checkpoints also generate from keyframes. Encode the prompt together with a
-first and a last keyframe; the encoder puts the images on the 768-short-edge canvas,
-runs them through the Qwen3-VL VLM alongside the prompt, and VAE-encodes the
-conditioning latents into the same prompt file:
+The same checkpoints also generate from keyframes. We provide an FL2VA example in
+[prompts/image/](prompts/image/), the fl2va test case of
+[xihc-ucb/Minimax-H3-Prompts](https://huggingface.co/datasets/xihc-ucb/Minimax-H3-Prompts):
+a first frame, a last frame, and the prompt encoded together with both keyframes
+(`example_fl2va.pt`, text in [prompts/README.md](prompts/README.md)).
+
+<table>
+<tr>
+<td width="50%"><img src="prompts/image/first.png" alt="first keyframe"></td>
+<td width="50%"><img src="prompts/image/last.png" alt="last keyframe"></td>
+</tr>
+<tr>
+<td align="center"><code>prompts/image/first.png</code></td>
+<td align="center"><code>prompts/image/last.png</code></td>
+</tr>
+</table>
+
+Render it with:
 
 ```bash
-python src/inference/encode_keyframes.py --prompt "..." \
-  --first first.png --last last.png --out prompts/mine_fl2va.pt
-
 python src/inference/infer.py \
   --config configs/inference/8nfe_tuned_fp8.yaml \
   checkpoint=ckpts/stage-dmd-step-250 \
-  render.prompt_file=prompts/mine_fl2va.pt \
-  render.out=results/mine_fl2va.mp4
+  render.prompt_file=prompts/image/example_fl2va.pt \
+  render.out=results/example_fl2va.mp4
+```
+
+For your own keyframes, encode the prompt together with the images first. The encoder
+puts them on the 768-short-edge canvas, runs them through the Qwen3-VL VLM alongside
+the prompt, and VAE-encodes the conditioning latents into the same prompt file; pass
+only `--first` for I2VA:
+
+```bash
+python src/inference/encode_keyframes.py --prompt "..." \
+  --first first.png --last last.png --out prompts/image/mine.pt
 ```
 
 The keyframes are held at the diffusers `fl2va` conditioning level throughout the
