@@ -22,14 +22,14 @@ We present some samples of generated videos here:
 
 <table>
 <tr>
-<td width="33%"><video src="https://github.com/user-attachments/assets/04aa614a-3ff3-43ab-a3fa-ed3f49e039ec" controls muted></video></td>
-<td width="33%"><video src="https://github.com/user-attachments/assets/7ac8d7dc-f635-4e3f-85da-89d681efdd52" controls muted></video></td>
-<td width="33%"><video src="https://github.com/user-attachments/assets/e3e9f30e-434e-4a0f-bb87-0ba5749abea4" controls muted></video></td>
+<td width="33%"><video src="https://github.com/user-attachments/assets/343d03e6-8d88-444d-b66c-19d9fb252b37" controls muted></video></td>
+<td width="33%"><video src="https://github.com/user-attachments/assets/9de4ffbc-1a38-4467-8c9e-c975d2b84fa1" controls muted></video></td>
+<td width="33%"><video src="https://github.com/user-attachments/assets/f0ec47d4-96ad-4fbb-8bc9-1b9d5eeb0b94" controls muted></video></td>
 </tr>
 <tr>
-<td width="33%"><video src="https://github.com/user-attachments/assets/811bb4d3-f036-45a7-8098-2752fdc5619d" controls muted></video></td>
-<td width="33%"><video src="https://github.com/user-attachments/assets/5f5ccfa6-5d88-4ac4-842a-774358432e28" controls muted></video></td>
-<td width="33%"><video src="https://github.com/user-attachments/assets/06dd0699-7047-4b25-bcb7-8b541a4e2718" controls muted></video></td>
+<td width="33%"><video src="https://github.com/user-attachments/assets/bf849387-03c6-45ef-988b-38164f27e88a" controls muted></video></td>
+<td width="33%"><video src="https://github.com/user-attachments/assets/2cc62303-1ebb-4d3f-a367-3c0125b11c3d" controls muted></video></td>
+<td width="33%"><video src="https://github.com/user-attachments/assets/2e0f43d3-4919-44c4-9f64-42d90d9e08b1" controls muted></video></td>
 </tr>
 </table>
 
