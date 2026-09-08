@@ -52,6 +52,17 @@ def load_models(model_root: str, device: str, vae_source: str = None,
     return transformer, vae, audio_vae
 
 
+def load_decoders(vae_source: str, device: str):
+    """Load only the final decoders, optionally onto CPU for a persistent worker."""
+    vae_source = resolve_weights(vae_source or DEFAULT_MODEL_ROOT)
+    vae = AutoencoderKLMiniMaxH3.from_pretrained(vae_source, subfolder="vae").to(device)
+    audio_vae = AutoencoderKLMiniMaxH3Audio.from_pretrained(
+        vae_source, subfolder="audio_vae").to(device)
+    vae.eval().requires_grad_(False)
+    audio_vae.eval().requires_grad_(False)
+    return vae, audio_vae
+
+
 
 def load_text(prompt_file: str, device: str):
     """A cached prompt from encode_prompt.py (prompts/*.pt)."""

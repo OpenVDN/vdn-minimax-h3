@@ -46,6 +46,7 @@ class InferenceKernels(KernelsConfig):
 class Fp8Config:
     enabled: bool = False                # NEVER default-on: fp8 changes the sample
     skip_end_blocks: int = 4             # scale granularity is per arch, not a knob
+    keep_original: bool = True           # false drops replaced BF16 weights (not reversible)
 
 
 @dataclass
@@ -59,6 +60,22 @@ class ParallelConfig:
     """torchrun layout for infer_ulysses.py."""
     softmax_ranks: int = 6               # 0 = standard Ulysses; n = n softmax + (world-n) linear
     profile: bool = False                # per-section CUDA events: profiling only
+
+
+@dataclass
+class WorkerConfig:
+    """Optional multi-request mode for ``infer_ulysses.py``.
+
+    The request file is JSONL. Each row overrides fields under ``render`` and must
+    provide a distinct ``prompt_file`` and ``out``. With CPU offload enabled, rank 0
+    swaps the already-assembled transformer out while decoding, then restores it;
+    the other ranks remain resident throughout.
+    """
+    requests_file: Optional[str] = None
+    decoder_cpu_offload: bool = False
+    # 0 swaps the full transformer. A positive value swaps only that many trailing
+    # transformer blocks, reducing PCIe traffic when the remaining weights and VAE fit.
+    transformer_cpu_offload_blocks: int = 0
 
 
 @dataclass
@@ -110,6 +127,7 @@ class InferenceConfig:
     kernels: InferenceKernels = field(default_factory=InferenceKernels)
     precision: PrecisionConfig = field(default_factory=PrecisionConfig)
     parallel: ParallelConfig = field(default_factory=ParallelConfig)
+    worker: WorkerConfig = field(default_factory=WorkerConfig)
     behavior: BehaviorConfig = field(default_factory=BehaviorConfig)
     ablation: AblationConfig = field(default_factory=AblationConfig)
 
@@ -130,6 +148,8 @@ def validate_kernels(cfg) -> None:
         raise ValueError("render.warmup_steps must be >= 0")
     if cfg.precision.fp8.skip_end_blocks < 0:
         raise ValueError("precision.fp8.skip_end_blocks must be >= 0")
+    if cfg.worker.transformer_cpu_offload_blocks < 0:
+        raise ValueError("worker.transformer_cpu_offload_blocks must be >= 0")
 
 
 def validate_parallel(cfg) -> None:
@@ -145,3 +165,6 @@ def validate_single_process(cfg) -> None:
     if OmegaConf.to_container(cfg.parallel) != asdict(ParallelConfig()):
         raise ValueError("parallel.* only applies to src/inference/infer_ulysses.py "
                          "(torchrun); infer.py is single-process")
+    if cfg.worker.requests_file:
+        raise ValueError("worker.* only applies to src/inference/infer_ulysses.py "
+                         "(torchrun)")

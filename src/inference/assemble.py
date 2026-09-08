@@ -138,7 +138,8 @@ def build_inference_model(cfg, device, *, load_decoders: bool = True,
     fp8_handle = []
     if cfg.precision.fp8.enabled:
         fp8_handle = convert_linear_to_fp8(
-            transformer, skip_end_blocks=cfg.precision.fp8.skip_end_blocks)
+            transformer, skip_end_blocks=cfg.precision.fp8.skip_end_blocks,
+            keep_original=cfg.precision.fp8.keep_original)
         say(f"fp8: {len(fp8_handle)} Linears quantised -- same seed will NOT "
             f"reproduce a bf16 render", flush=True)
 
