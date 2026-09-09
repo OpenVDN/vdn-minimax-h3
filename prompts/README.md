@@ -1,8 +1,7 @@
 # Example prompts
 
-Pre-encoded text embeddings (`example_N.pt`) for three T2VA example prompts, and one
-FL2VA example (`image/example_fl2va.pt`, encoded together with `image/first.png` and
-`image/last.png`); the text of each:
+Pre-encoded text embeddings: three T2VA prompts (`example_N.pt`) and one FL2VA prompt
+(`image/example_fl2va.pt`). The text of each:
 
 ## example_0.pt
 
@@ -80,10 +79,7 @@ Solo cello playing long, sustained, mournful notes at a very slow tempo, undersc
 
 ## image/example_fl2va.pt
 
-The fl2va test case of
-[xihc-ucb/Minimax-H3-Prompts](https://huggingface.co/datasets/xihc-ucb/Minimax-H3-Prompts)
-(sample `fl2va-000001`, version 2), with its two published keyframes copied here as
-`image/first.png` (first frame) and `image/last.png` (last frame), 768x1344.
+Keyframes `image/first.png` and `image/last.png`.
 
 How the reference pictures align with the target video — Picture 1 (from Shot 1) aligns with the 0.00-second mark of the target video; Picture 2 (from Shot 1) aligns with the 14.30-second mark of the target video.
 

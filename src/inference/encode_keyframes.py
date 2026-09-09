@@ -1,6 +1,7 @@
-"""Encode an i2va / fl2va request -- prompt + first and/or last keyframe -- and cache it
-as one prompt .pt that infer.py renders like any t2va cache, plus the keyframe
-conditioning. `--first` alone is i2va, `--first` and `--last` together is fl2va.
+"""Encode a keyframe request -- prompt + first and/or last keyframe -- and cache it as
+one prompt .pt that infer.py renders like any t2va cache, plus the keyframe
+conditioning. Which keyframes you pass is the mode: `--first` alone is i2va, `--last`
+alone is l2va, both is fl2va.
 
     python src/inference/encode_keyframes.py --prompt "..." \\
         --first first.png --last last.png --out prompts/mine.pt
@@ -38,6 +39,23 @@ TEXT_ENCODER_LAYER = 50
 VIDEO_TAG, TEXT_TAG = 0, 1
 CANVAS_MULTIPLE, CANVAS_SHORT_EDGE, CANVAS_MAX_PIXELS = 32, 768, 768 * 1344
 KEYFRAME_ENCODE_SEED = 42
+
+# (anchors) -> mode, a substring of its instruction, the instruction. MiniMax-H3 expects
+# the prompt to open with the line for its mode (VIDEO_PROMPT_WRITING_GUIDE_base_en.md);
+# i2va's is fixed, the other two name the final shot and the duration.
+KEYFRAME_MODES = {
+    ("first",): ("i2va", "is fully referenced",
+                 "For the target video, at 0.00 seconds into the target video, "
+                 "<Picture 1> (from [Shot 1]) is fully referenced."),
+    ("last",): ("l2va", "How the reference pictures align",
+                "How the reference pictures align with the target video \u2014 <Picture 1> "
+                "(from [Shot N]) aligns with the S.SS-second mark of the target video."),
+    ("first", "last"): ("fl2va", "How the reference pictures align",
+                        "How the reference pictures align with the target video \u2014 Picture 1 "
+                        "(from Shot 1) aligns with the 0.00-second mark of the target video; "
+                        "Picture 2 (from Shot N) aligns with the S.SS-second mark of the "
+                        "target video."),
+}
 
 
 def put_on_canvas(keyframes):
@@ -103,6 +121,19 @@ def qwen3vl_prompt_embeds(text_encoder, processor, token_ids, vision_inputs, dev
     return outputs.hidden_states[TEXT_ENCODER_LAYER][0].to(torch.bfloat16).cpu()
 
 
+def check_instruction(prompt, anchors):
+    """The mode these keyframes select. Warns on stderr when the prompt does not open
+    with that mode's instruction line -- never refuses: the check is a substring, and a
+    prompt is free text."""
+    mode, marker, template = KEYFRAME_MODES[tuple(anchors)]
+    opening = next((line for line in prompt.splitlines() if line.strip()), "")
+    if marker.lower() not in opening.lower():
+        print(f"warning: {mode} keyframes, but the prompt does not open with {mode}'s "
+              f"instruction line. MiniMax-H3 expects it as the first line:\n"
+              f"    {template}\nEncoding the prompt as given.", file=sys.stderr, flush=True)
+    return mode
+
+
 def main():
     p = argparse.ArgumentParser()
     p.add_argument("--prompt", type=str, required=True)
@@ -123,8 +154,9 @@ def main():
 
     pairs = [(anchor, path) for anchor, path in (("first", args.first), ("last", args.last)) if path]
     anchors = [anchor for anchor, _ in pairs]
+    mode = check_instruction(args.prompt, anchors)
     keyframes, height, width = put_on_canvas([Image.open(path) for _, path in pairs])
-    print(f"canvas {width}x{height}; keyframes {anchors}", flush=True)
+    print(f"{mode}: canvas {width}x{height}; keyframes {anchors}", flush=True)
     device = args.device
 
     processor = Qwen3VLProcessor.from_pretrained(args.model_root, subfolder="processor")

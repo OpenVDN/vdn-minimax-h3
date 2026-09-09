@@ -35,7 +35,7 @@ We present some samples of generated videos here:
 
 ## News
 
-- **September 8, 2026:** We support I2VA and FL2VA now with the same checkpoint.
+- **September 8, 2026:** We support I2VA, FL2VA and L2VA now with the same checkpoint.
 - **September 6, 2026:** We released the [VDN-H3 blog](https://openvdn.github.io/),
   [training and inference code](https://github.com/OpenVDN/vdn-minimax-h3), and
   [model weights](https://huggingface.co/OpenVDN/vdn-minimax-h3).
@@ -82,7 +82,8 @@ bash scripts/setup_diffusers.sh
 
 ### Download the weights
 
-Download everything (about 82 GB) into `ckpts/` using
+Download everything (about 82 GB) into `ckpts/` from
+[Hugging Face](https://huggingface.co/OpenVDN/vdn-minimax-h3) using
 
 ```bash
 hf download OpenVDN/vdn-minimax-h3 --local-dir ckpts
@@ -139,10 +140,7 @@ before encoding it. This can greatly improve the generated video quality.
 ### Image-to-Video-Audio (I2VA) and First-Last-to-Video-Audio (FL2VA)
 
 The same checkpoints also generate from keyframes. We provide an FL2VA example in
-[prompts/image/](prompts/image/), the fl2va test case of
-[xihc-ucb/Minimax-H3-Prompts](https://huggingface.co/datasets/xihc-ucb/Minimax-H3-Prompts):
-a first frame, a last frame, and the prompt encoded together with both keyframes
-(`example_fl2va.pt`, text in [prompts/README.md](prompts/README.md)).
+[prompts/image/](prompts/image/):
 
 <table>
 <tr>
@@ -165,21 +163,22 @@ python src/inference/infer.py \
   render.out=results/example_fl2va.mp4
 ```
 
+and you should get something like this:
+
 <video src="https://github.com/user-attachments/assets/56728e17-9081-4f5a-b707-54de1cd8c166" controls muted></video>
 
-For your own keyframes, encode the prompt together with the images first. The encoder
-puts them on the 768-short-edge canvas, runs them through the Qwen3-VL VLM alongside
-the prompt, and VAE-encodes the conditioning latents into the same prompt file; pass
-only `--first` for I2VA:
+For your own keyframes, encode the prompt together with the images first:
 
 ```bash
 python src/inference/encode_keyframes.py --prompt "..." \
   --first first.png --last last.png --out prompts/image/mine.pt
 ```
 
-The keyframes are held at the diffusers `fl2va` conditioning level throughout the
-denoising loop, and only the generated frames are stepped. Both entrypoints accept a
-keyframe prompt file, so the multi-GPU path renders them too:
+`--first` alone is I2VA, `--last` alone is L2VA, both is FL2VA. Each mode wants its own
+instruction as the prompt's first line, given by MiniMax-H3's
+[prompt writing guide](https://huggingface.co/MiniMaxAI/MiniMax-H3/blob/main/docs/VIDEO_PROMPT_WRITING_GUIDE_base_en.md).
+
+The multi-GPU entrypoint takes the same prompt file:
 
 ```bash
 torchrun --standalone --nproc_per_node=8 src/inference/infer_ulysses.py \
@@ -188,10 +187,6 @@ torchrun --standalone --nproc_per_node=8 src/inference/infer_ulysses.py \
   render.prompt_file=prompts/image/example_fl2va.pt \
   render.out=results/example_fl2va.mp4
 ```
-
-Keyframes lengthen the packed sequence, by their vision tokens and one conditioning
-frame each, so a keyframe render is a little slower than the text-only figures under
-[Results](#results): the example above runs at 2.62 s/NFE on eight H200s.
 
 ### Choosing an inference configuration
 
