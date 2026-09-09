@@ -1,6 +1,6 @@
 # Video DeltaNet: Hybrid Attention to Speed Up Video Models with Near-Lossless Quality
 
-[[`Blog`](https://openvdn.github.io/)] [[`Code`](https://github.com/OpenVDN/vdn-minimax-h3)] [[`🤗 Weights`](https://huggingface.co/OpenVDN/vdn-minimax-h3)] [[`License`](#license)]
+[[`Blog`](https://openvdn.github.io/)] [[`Code`](https://github.com/OpenVDN/vdn-minimax-h3)] [[`🤗 Weights`](https://huggingface.co/OpenVDN/vdn-minimax-h3)] [[`ModelScope`](https://www.modelscope.ai/models/OpenVDN/vdn-minimax-h3)] [[`License`](#license)]
 
 We release **VDN-Minimax-H3** (**VDN-H3**), a hybrid-attention model that
 generates video faster than it plays, powered by
@@ -86,6 +86,12 @@ Download everything (about 82 GB) into `ckpts/` using
 
 ```bash
 hf download OpenVDN/vdn-minimax-h3 --local-dir ckpts
+```
+
+or from [ModelScope](https://www.modelscope.ai/models/OpenVDN/vdn-minimax-h3) with
+
+```bash
+modelscope download --model OpenVDN/vdn-minimax-h3 --local_dir ckpts
 ```
 
 The layout will look like
