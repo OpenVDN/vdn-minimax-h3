@@ -159,6 +159,8 @@ python src/inference/infer.py \
   render.out=results/example_fl2va.mp4
 ```
 
+<video src="https://github.com/user-attachments/assets/56728e17-9081-4f5a-b707-54de1cd8c166" controls muted></video>
+
 For your own keyframes, encode the prompt together with the images first. The encoder
 puts them on the 768-short-edge canvas, runs them through the Qwen3-VL VLM alongside
 the prompt, and VAE-encodes the conditioning latents into the same prompt file; pass
@@ -170,8 +172,20 @@ python src/inference/encode_keyframes.py --prompt "..." \
 ```
 
 The keyframes are held at the diffusers `fl2va` conditioning level throughout the
-denoising loop, and only the generated frames are stepped. Keyframe conditioning is
-supported on the single-GPU entrypoint; the multi-GPU Ulysses scripts are T2VA only.
+denoising loop, and only the generated frames are stepped. Both entrypoints accept a
+keyframe prompt file, so the multi-GPU path renders them too:
+
+```bash
+torchrun --standalone --nproc_per_node=8 src/inference/infer_ulysses.py \
+  --config configs/inference/8nfe_tuned_fp8_ulysses_h200.yaml \
+  checkpoint=ckpts/stage-dmd-step-250 \
+  render.prompt_file=prompts/image/example_fl2va.pt \
+  render.out=results/example_fl2va.mp4
+```
+
+Keyframes lengthen the packed sequence, by their vision tokens and one conditioning
+frame each, so a keyframe render is a little slower than the text-only figures under
+[Results](#results): the example above runs at 2.62 s/NFE on eight H200s.
 
 ### Choosing an inference configuration
 

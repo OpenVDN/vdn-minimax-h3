@@ -5,6 +5,10 @@ Launch with ``torchrun --nproc_per_node=8 src/inference/infer_ulysses.py
 path is intentionally untouched. The rank layout, optimisation ladder, profiling and
 warm-up are the ``parallel.*`` / ``render.warmup_steps`` config fields -- no
 environment variable is read beyond torchrun's own LOCAL_RANK/WORLD_SIZE.
+
+t2va, i2va and fl2va all run here: the conditioning rows a keyframe cache adds sit
+outside the layout's video span, so they shard, gather and attend as ordinary global
+rows and no collective changes shape.
 """
 
 from __future__ import annotations
@@ -72,9 +76,8 @@ def main():
         )
 
     prompt_embeds, text_token_tags, conditions = load_prompt(cfg.render.prompt_file, str(device))
-    if conditions:
-        raise ValueError("keyframe conditioning (i2va / fl2va) is only supported by "
-                         "infer.py; the Ulysses path would have silently ignored it")
+    if conditions and runtime.is_main:
+        print(f"keyframes anchored {conditions[0]}", flush=True)
     runtime.barrier()
     torch.cuda.synchronize(device)
     model_setup_seconds = time.perf_counter() - process_started
@@ -92,6 +95,7 @@ def main():
             audio_shift=cfg.render.audio_shift,
             runtime=runtime,
             step_seconds=step_seconds,
+            conditions=conditions,
         )
 
     warmup_steps = cfg.render.warmup_steps
