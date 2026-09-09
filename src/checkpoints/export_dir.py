@@ -10,8 +10,12 @@
                                          model_spec.transforms[0].config, for reading)
         model.safetensors                every non-LoRA tensor the transform introduced
       adapters/<name>/
-        adapter_config.json              that adapter's spec entry (rank, alpha, targets)
+        adapter_spec.json                that adapter's spec entry (rank, alpha, targets)
         adapter_model.safetensors        its lora_A / lora_B tensors, peft names kept
+
+The adapter's JSON is `adapter_spec.json` rather than peft's `adapter_config.json`
+spelling: the schema is this project's ModelSpec entry, and a peft-named file peft
+cannot read fails confusingly. Nothing reads it -- it is the spec, per adapter, to read.
 
 Same content as the single .pt (`kind: weights`), readable by the same `load_checkpoint`;
 inference does not know which one it got. Config is JSON you can open, weights are
@@ -56,7 +60,7 @@ def split_weights(weights: Dict[str, torch.Tensor]) -> Tuple[Dict[str, torch.Ten
     return branch, adapters
 
 
-def _adapter_config(spec: Dict[str, Any], name: str, index: int) -> Dict[str, Any]:
+def _adapter_spec(spec: Dict[str, Any], name: str, index: int) -> Dict[str, Any]:
     """Match an adapter's tensors to its spec entry: by `config.name` when the spec names
     it, else by position (the first, unnamed entry is peft's `default`)."""
     entries = spec.get("adapters", [])
@@ -106,8 +110,8 @@ def export_checkpoint_dir(artifact: CheckpointArtifact, out_dir: str,
     for index, (name, tensors) in enumerate(adapters.items()):
         adir = os.path.join(tmp, ADAPTERS_DIR, name)
         os.makedirs(adir)
-        with open(os.path.join(adir, "adapter_config.json"), "w") as f:
-            json.dump(_adapter_config(artifact.model_spec, name, index), f, indent=2,
+        with open(os.path.join(adir, "adapter_spec.json"), "w") as f:
+            json.dump(_adapter_spec(artifact.model_spec, name, index), f, indent=2,
                       sort_keys=True)
             f.write("\n")
         save_file(prepared(tensors), os.path.join(adir, "adapter_model.safetensors"))
