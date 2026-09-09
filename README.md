@@ -137,7 +137,7 @@ or the official
 [prompt-writing skills](https://github.com/MiniMax-AI/MiniMax-H3/tree/main/skills)
 before encoding it. This can greatly improve the generated video quality.
 
-### Image-to-Video-Audio (I2VA) and First-Last-to-Video-Audio (FL2VA)
+### Supporting FL2VA, I2VA, and L2VA
 
 The same checkpoints also generate from keyframes. We provide an FL2VA example in
 [prompts/image/](prompts/image/):
