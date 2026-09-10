@@ -121,9 +121,8 @@ class VDNMiniMaxH3Transformer3DModel(MiniMaxH3Transformer3DModel):
 
         # Last, as in `assemble.build_inference_model`, and off unless asked: fp8 halves
         # the wide Linears -- 62 GB of weights become 43 -- and roughly doubles their
-        # GEMMs, but it CHANGES the sample rather than degrading it, so the same seed
-        # stops reproducing a bf16 render. `skip_end_blocks=0` is what every tuned config
-        # in the code repository renders with. The swap is one way.
+        # GEMMs. `skip_end_blocks=0` is what every tuned config in the code repository
+        # renders with. The swap is one way.
         if fp8 is None:
             fp8 = spec.get("fp8", False)
         if fp8:

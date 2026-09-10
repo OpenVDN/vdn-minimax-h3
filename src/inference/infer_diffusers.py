@@ -59,9 +59,8 @@ def main():
     p.add_argument("--first", help="keyframe the video starts from")
     p.add_argument("--last", help="keyframe the video ends on")
     p.add_argument("--fp8", action="store_true",
-                   help="every wide Linear in fp8 e4m3: the weights drop from 62 GB to "
-                        "43 and the GEMMs roughly double. Changes the sample -- this "
-                        "seed will not reproduce the bf16 render")
+                   help="every wide Linear in fp8 e4m3: the weights drop from 62 GB "
+                        "to 43 and the GEMMs roughly double")
     p.add_argument("--seed", type=int, default=0)
     p.add_argument("--device", default="cuda")
     args = p.parse_args()
