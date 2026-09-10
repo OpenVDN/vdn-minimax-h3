@@ -224,19 +224,10 @@ Use `workflow="fl2va"` to pass `image` and `last_image` keyframes instead. Here
 The offload is not optional on one GPU: the transformer and the Qwen3-VL text encoder
 are 66 GB each.
 
-The multi-step model is the same call with one component pointed elsewhere:
-
-```python
-pipe.load_components(trust_remote_code=True, torch_dtype=torch.bfloat16,
-                     subfolder={"transformer": "stage-b-step-2000/diffusers"})
-```
-
 The same thing as a runnable file, keyframes included:
 
 ```bash
 python src/inference/infer_diffusers.py "a prompt" --out results/diffusers.mp4
-python src/inference/infer_diffusers.py "a prompt" --steps 50 \
-    --transformer stage-b-step-2000/diffusers
 python src/inference/infer_diffusers.py "a prompt" \
     --first prompts/image/first.png --last prompts/image/last.png
 ```
