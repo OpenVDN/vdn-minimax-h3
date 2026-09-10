@@ -80,6 +80,42 @@ bash scripts/setup_diffusers.sh
 
 ## Quick Start — Generate your own video
 
+### Load it with Diffusers
+
+The released checkpoints are also Modular Diffusers components, so a render needs no
+clone and no patched `diffusers`:
+
+```python
+import torch
+from diffusers import ComponentsManager, ModularPipeline
+
+manager = ComponentsManager()
+pipe = ModularPipeline.from_pretrained("OpenVDN/vdn-minimax-h3", workflow="t2va",
+                                       components_manager=manager, collection="vdn")
+pipe.load_components(trust_remote_code=True, torch_dtype=torch.bfloat16)
+manager.enable_auto_cpu_offload(device="cuda")
+
+out = pipe(prompt=prompt, num_frames=124, num_inference_steps=9,
+           output=["videos", "audio", "sampling_rate"])
+```
+
+Use `workflow="fl2va"` to pass `image` and `last_image` keyframes instead. Here
+`num_inference_steps` counts sigma grid points, so 9 of them is 8 model evaluations.
+The offload is not optional on one GPU: the transformer and the Qwen3-VL text encoder
+are 66 GB each.
+
+The same thing as a runnable file, keyframes included:
+
+```bash
+python src/inference/infer_diffusers.py "a prompt" --out results/diffusers.mp4
+python src/inference/infer_diffusers.py "a prompt" \
+    --first prompts/image/first.png --last prompts/image/last.png
+```
+
+This path is single-GPU bf16, and it is the quickest way to see the model rather
+than the fastest way to run it. The fp8 and Ulysses stack below is where the speeds
+in [Results](#results) come from.
+
 ### Download the weights
 
 Download everything (about 82 GB) into `ckpts/` from
@@ -199,41 +235,6 @@ bash scripts/inference/8nfe_tuned_fp8.sh                # one GPU
 bash scripts/inference/8nfe_tuned_fp8_ulysses_h200.sh   # eight H200s, one node
 bash scripts/inference/8nfe_tuned_fp8_ulysses_b200.sh   # eight B200s, one node
 ```
-
-### Load it with Diffusers
-
-The released checkpoints are also Modular Diffusers components, so a render needs no
-clone and no patched `diffusers`:
-
-```python
-import torch
-from diffusers import ComponentsManager, ModularPipeline
-
-manager = ComponentsManager()
-pipe = ModularPipeline.from_pretrained("OpenVDN/vdn-minimax-h3", workflow="t2va",
-                                       components_manager=manager, collection="vdn")
-pipe.load_components(trust_remote_code=True, torch_dtype=torch.bfloat16)
-manager.enable_auto_cpu_offload(device="cuda")
-
-out = pipe(prompt=prompt, num_frames=124, num_inference_steps=9,
-           output=["videos", "audio", "sampling_rate"])
-```
-
-Use `workflow="fl2va"` to pass `image` and `last_image` keyframes instead. Here
-`num_inference_steps` counts sigma grid points, so 9 of them is 8 model evaluations.
-The offload is not optional on one GPU: the transformer and the Qwen3-VL text encoder
-are 66 GB each.
-
-The same thing as a runnable file, keyframes included:
-
-```bash
-python src/inference/infer_diffusers.py "a prompt" --out results/diffusers.mp4
-python src/inference/infer_diffusers.py "a prompt" \
-    --first prompts/image/first.png --last prompts/image/last.png
-```
-
-This path is single-GPU bf16. The fp8 and Ulysses stack above is where the speeds in
-[Results](#results) come from.
 
 ## Results
 
