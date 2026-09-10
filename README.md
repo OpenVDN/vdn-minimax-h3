@@ -138,7 +138,7 @@ ckpts/
   stage-dmd-step-250/  VDN-H3-8-step: the above + adapters/turbo/ · 5.1 GB
 ```
 
-### Your first render
+### Render a video
 
 Then, run the following script:
 
