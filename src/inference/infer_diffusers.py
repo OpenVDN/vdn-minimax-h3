@@ -1,14 +1,16 @@
-"""Render through the PUBLISHED diffusers components, with nothing from this repository.
+"""Render through the PUBLISHED diffusers components, not this repository's stack.
 
+    python src/inference/infer_diffusers.py                       # prompts/example_0.pt
     python src/inference/infer_diffusers.py "a prompt" --out results/diffusers.mp4
     python src/inference/infer_diffusers.py "a prompt" --steps 50 \
         --transformer stage-b-step-2000/diffusers
     python src/inference/infer_diffusers.py "a prompt" \
         --first prompts/image/first.png --last prompts/image/last.png
 
-This is the README's `Load it with Diffusers` snippet as a runnable file: it imports
-`diffusers` and nothing else, so it works from a bare `pip install diffusers` checkout
-of nowhere in particular. It deliberately shares NO code with infer.py and
+This is the README's `Load it with Diffusers` snippet as a runnable file. Everything it
+renders comes from the Hub, so `pip install diffusers` is the whole setup; the only
+thing it reads from here is the default prompt, and a prompt of your own replaces that.
+It deliberately shares NO code with infer.py and
 infer_ulysses.py -- those are the fast stack (fp8, the decomposed window kernel,
 Ulysses); this is the portable one, single-GPU bf16.
 
@@ -18,6 +20,7 @@ transformer and the 66 GB Qwen3-VL text encoder share a card: whichever is not r
 sits on the CPU.
 """
 import argparse
+import os
 
 import torch
 from diffusers import ComponentsManager, ModularPipeline
@@ -25,17 +28,26 @@ from diffusers.utils.export_utils import encode_video
 
 REPO = "OpenVDN/vdn-minimax-h3"
 FPS = 24
+# The repository's own showcase prompt. Every prompt cache carries the text it was
+# encoded from, so the default is that text rather than a second copy of it here.
+DEFAULT_PROMPT = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(
+    os.path.abspath(__file__)))), "prompts", "example_0.pt")
 
 
 def main():
     p = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
-    p.add_argument("prompt")
+    p.add_argument("prompt", nargs="?",
+                   help=f"defaults to the text {os.path.basename(DEFAULT_PROMPT)} was "
+                        "encoded from")
     p.add_argument("--out", default="results/diffusers.mp4")
     p.add_argument("--steps", type=int, default=8,
                    help="model evaluations (NFE). The scheduler counts sigma grid "
                         "points, one more than that, and this passes the +1 for you")
-    p.add_argument("--frames", type=int, default=124,
-                   help="snapped up to the next 17n+5; 5 to 15 seconds at 24 fps")
+    p.add_argument("--frames", type=int, default=209,
+                   help="snapped up to the next 17n+5; 5 to 15 seconds at 24 fps. "
+                        "8.7 seconds is what one 140 GB GPU holds on this path -- the "
+                        "14.4 of the reported numbers needs the room fp8 buys, and 345 "
+                        "frames of packed sequence runs out of memory in bf16")
     p.add_argument("--transformer", default=None,
                    help="a checkpoint's diffusers/ subfolder. Default: whatever the "
                         "repository's index names, the 8-step model")
@@ -44,6 +56,8 @@ def main():
     p.add_argument("--seed", type=int, default=0)
     p.add_argument("--device", default="cuda")
     args = p.parse_args()
+    prompt = args.prompt or torch.load(DEFAULT_PROMPT, map_location="cpu",
+                                       weights_only=True)["prompt"]
 
     keyframes = {}
     if args.first or args.last:
@@ -66,7 +80,7 @@ def main():
     manager.enable_auto_cpu_offload(device=args.device)
 
     videos, audio, rate = pipe(
-        prompt=args.prompt,
+        prompt=prompt,
         num_frames=args.frames,
         num_inference_steps=args.steps + 1,
         generator=torch.Generator(args.device).manual_seed(args.seed),

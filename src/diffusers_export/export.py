@@ -136,19 +136,20 @@ def validate_order(modules, order):
 
 
 def top_level(text: str):
-    """Module docstring, `src.` imports, other imports, and everything else."""
+    """Module docstring, `src.` imports at ANY depth, other top-level imports, and
+    everything else. Depth matters: one module imports a sibling lazily inside a
+    function, and a merged file that keeps that line raises ModuleNotFoundError the
+    first time the function runs, on a machine that does not have this repository."""
     tree = ast.parse(text)
     doc, rest = None, list(tree.body)
     if rest and isinstance(rest[0], ast.Expr) and isinstance(rest[0].value, ast.Constant) \
             and isinstance(rest[0].value.value, str):
         doc, rest = rest[0], rest[1:]
-    drop, imports = [], []
-    for node in rest:
-        if isinstance(node, ast.ImportFrom) and not node.level and node.module \
-                and node.module.startswith("src."):
-            drop.append(node)
-        elif isinstance(node, (ast.Import, ast.ImportFrom)):
-            imports.append(node)
+    drop = [node for node in ast.walk(tree)
+            if isinstance(node, ast.ImportFrom) and not node.level and node.module
+            and node.module.startswith("src.")]
+    imports = [node for node in rest
+               if isinstance(node, (ast.Import, ast.ImportFrom)) and node not in drop]
     return doc, drop, imports, rest
 
 
@@ -299,10 +300,16 @@ def write_code(out_dir: str):
     modules = {d: p for d, p in closure(entry).items() if not is_reexport(p)}
     text = merge(entry, modules)
 
-    ast.parse(text)
+    tree = ast.parse(text)
     left = _LOADER_SEES.findall(text)
     if left:
         raise SystemExit(f"merged file still has relative imports: {sorted(set(left))}")
+    unresolved = sorted({node.module for node in ast.walk(tree)
+                         if isinstance(node, ast.ImportFrom) and node.module
+                         and node.module.startswith("src.")})
+    if unresolved:
+        raise SystemExit(f"merged file still imports {unresolved} -- nothing on the "
+                         "Hub can satisfy that")
 
     name = f"{ENTRY_MODULE}.py"
     with open(os.path.join(out_dir, name), "w") as f:
