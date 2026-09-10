@@ -104,6 +104,10 @@ Use `workflow="fl2va"` to pass `image` and `last_image` keyframes instead. Here
 The offload is not optional on one GPU: the text encoder is 62 GB and the transformer
 66 GB. Neither is its margin -- the default is far too small for the working set.
 
+`fp8={"transformer": True}` -- `--fp8` for the script below -- puts every wide Linear in
+fp8 e4m3: the transformer drops from 66 GB to 45 and the render peaks at 65 GB rather
+than 85. It changes the sample, so the same seed is a different render, not a worse one.
+
 Or as a script, keyframes included:
 
 ```bash

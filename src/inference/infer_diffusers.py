@@ -58,6 +58,10 @@ def main():
                         "repository's index names, the 8-step model")
     p.add_argument("--first", help="keyframe the video starts from")
     p.add_argument("--last", help="keyframe the video ends on")
+    p.add_argument("--fp8", action="store_true",
+                   help="every wide Linear in fp8 e4m3: the weights drop from 62 GB to "
+                        "43 and the GEMMs roughly double. Changes the sample -- this "
+                        "seed will not reproduce the bf16 render")
     p.add_argument("--seed", type=int, default=0)
     p.add_argument("--device", default="cuda")
     args = p.parse_args()
@@ -81,6 +85,9 @@ def main():
     load_kwargs = {"trust_remote_code": True, "torch_dtype": torch.bfloat16}
     if args.transformer:
         load_kwargs["subfolder"] = {"transformer": args.transformer}
+    if args.fp8:
+        # A dict keys a kwarg to one component; the text encoder would not know it.
+        load_kwargs["fp8"] = {"transformer": True}
     pipe.load_components(**load_kwargs)
     manager.enable_auto_cpu_offload(device=args.device, memory_reserve_margin="40GB")
 

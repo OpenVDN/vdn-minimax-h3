@@ -35,10 +35,12 @@ Rowwise activation scaling is used on sm90 anyway because it is free there.
 `skip_end_blocks` leaves the first and last N blocks in bf16; it keeps most of the
 speedup and removes a disproportionate share of the error.
 
-    from src.models.ops.fp8_linear import convert_linear_to_fp8, revert_fp8   # infer.py
-    handle = convert_linear_to_fp8(model)      # after any LoRA merge, before the render
-    ...
-    revert_fp8(handle)                         # exact: the original modules come back
+    from src.models.ops.fp8_linear import convert_linear_to_fp8          # infer.py
+    quantised = convert_linear_to_fp8(model)   # after any LoRA merge, before the render
+
+The swap is ONE WAY: the bf16 weight is released as each Linear is replaced, so the
+quantised model is roughly half the weight of the one it came from and there is nothing
+to put back. Rendering bf16 again means loading the model again.
 
 SM100 USES PER-TENSOR SCALES ON BOTH SIDES, and this is a dispatch fact, not a numerics
 preference. torch 2.13 routes rowwise-scaled `_scaled_mm` on sm100 to a generic CUTLASS
@@ -243,8 +245,8 @@ class Fp8Linear(nn.Module):
 
     The weight is quantised ONCE, per output channel, at construction; the activation is
     quantised per row on every call, or by the caller (`forward_quantized`) when one
-    activation feeds several of these. The original bf16 module is kept, untouched, so
-    `revert_fp8` can put it back.
+    activation feeds several of these. Only the fp8 copy and the bias are kept -- the
+    bf16 weight goes as soon as the caller drops the Linear it came from.
     """
 
     def __init__(self, linear: nn.Linear):
@@ -263,19 +265,15 @@ class Fp8Linear(nn.Module):
             self.register_buffer("weight_fp8",
                                  (weight / scale.to(weight.dtype)).to(FP8_DTYPE))
             self.register_buffer("weight_scale", scale.reshape(1, -1).contiguous())
-        self.original = linear
-
-    @property
-    def bias(self):
-        return self.original.bias
+        self.register_parameter("bias", linear.bias)
 
     def forward_quantized(self, x_fp8, x_scale, out_dtype=torch.bfloat16):
         """[M, K] fp8 rows and their scales ([M, 1] rowwise / [1, 1] per-tensor) -> [M, N]."""
         out = torch._scaled_mm(x_fp8, self.weight_fp8.t(),
                                scale_a=x_scale, scale_b=self.weight_scale,
                                out_dtype=out_dtype, use_fast_accum=True)
-        if self.original.bias is not None:
-            out = out + self.original.bias
+        if self.bias is not None:
+            out = out + self.bias
         return out
 
     def forward(self, x):
@@ -298,14 +296,18 @@ def _blocks_to_skip(model, skip_end_blocks):
 
 
 def convert_linear_to_fp8(model, min_width=MIN_WIDTH, skip_end_blocks=SKIP_END_BLOCKS):
-    """Swap the wide Linears for fp8 ones. Returns a handle to pass to `revert_fp8`.
+    """Swap the wide Linears for fp8 ones, in place. Returns how many were swapped.
 
     Call it AFTER any LoRA merge -- the merger writes into `Linear.weight`, and this
     reads that weight once to build the fp8 copy. Converting first would quantise the
     unmerged weights and then silently ignore the merge.
+
+    One Linear at a time, and the bf16 one is unreferenced the moment its parent is
+    repointed: peak memory is the model plus a single fp8 weight, and it falls from
+    there. There is no way back -- see the header.
     """
     skip = _blocks_to_skip(model, skip_end_blocks)
-    swapped = []
+    swapped = 0
     for parent in list(model.modules()):
         for name, child in list(parent.named_children()):
             if not isinstance(child, nn.Linear):
@@ -315,12 +317,5 @@ def convert_linear_to_fp8(model, min_width=MIN_WIDTH, skip_end_blocks=SKIP_END_B
             if id(child) in skip:
                 continue
             setattr(parent, name, Fp8Linear(child).to(child.weight.device))
-            swapped.append((parent, name, child))
+            swapped += 1
     return swapped
-
-
-def revert_fp8(handle):
-    """Put the original Linears back. Exact -- they were never modified."""
-    for parent, name, child in handle:
-        setattr(parent, name, child)
-    return len(handle)

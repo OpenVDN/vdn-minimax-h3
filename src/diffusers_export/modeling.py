@@ -18,6 +18,12 @@ VDN weights are the linear branch and the LoRA adapters one level up from `diffu
 Pointing at them instead of copying them is why the published layout holds no duplicate
 weights. The paths are `config.json`'s `vdn` block, written relative to the checkpoint
 directory that contains `diffusers/`.
+
+`fp8=True` is the one thing here that is a choice rather than assembly, which is why it
+is a keyword and defaults off. Through a pipeline it is per-component:
+
+    pipe.load_components(trust_remote_code=True, torch_dtype=torch.bfloat16,
+                         fp8={"transformer": True})
 """
 import json
 import os
@@ -29,6 +35,7 @@ from diffusers import MiniMaxH3Transformer3DModel
 from src.inference.utils.lora import merge_lora_state
 from src.models.hybrid_transform import (apply_hybrid_attention_transform, iter_hybrids,
                                          set_inference_mode, set_softmax_backend)
+from src.models.ops.fp8_linear import convert_linear_to_fp8
 
 CONFIG_KEY = "vdn"
 
@@ -71,7 +78,7 @@ class VDNMiniMaxH3Transformer3DModel(MiniMaxH3Transformer3DModel):
     @classmethod
     def from_pretrained(cls, pretrained_model_name_or_path, *, subfolder=None,
                         cache_dir=None, revision=None, token=None,
-                        local_files_only=None, **kwargs):
+                        local_files_only=None, fp8=None, **kwargs):
         from safetensors.torch import load_file
 
         source = pretrained_model_name_or_path
@@ -111,4 +118,14 @@ class VDNMiniMaxH3Transformer3DModel(MiniMaxH3Transformer3DModel):
         if spec.get("inference_kernels", True):
             set_inference_mode(model, True)
             set_softmax_backend(model, spec.get("softmax_backend", "auto"))
+
+        # Last, as in `assemble.build_inference_model`, and off unless asked: fp8 halves
+        # the wide Linears -- 62 GB of weights become 43 -- and roughly doubles their
+        # GEMMs, but it CHANGES the sample rather than degrading it, so the same seed
+        # stops reproducing a bf16 render. `skip_end_blocks=0` is what every tuned config
+        # in the code repository renders with. The swap is one way.
+        if fp8 is None:
+            fp8 = spec.get("fp8", False)
+        if fp8:
+            convert_linear_to_fp8(model, skip_end_blocks=0)
         return model

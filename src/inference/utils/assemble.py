@@ -134,17 +134,17 @@ def build_inference_model(cfg, device, *, load_decoders: bool = True,
         say(f"ABLATION ACTIVE: {ablated} -- this output is a study, not a sample",
             flush=True)
 
-    fp8_handle = []
+    fp8_linears = 0
     if cfg.precision.fp8.enabled:
-        fp8_handle = convert_linear_to_fp8(
+        fp8_linears = convert_linear_to_fp8(
             transformer, skip_end_blocks=cfg.precision.fp8.skip_end_blocks)
-        say(f"fp8: {len(fp8_handle)} Linears quantised -- same seed will NOT "
+        say(f"fp8: {fp8_linears} Linears quantised -- same seed will NOT "
             f"reproduce a bf16 render", flush=True)
 
     return InferenceModel(transformer=transformer, vae=vae, audio_vae=audio_vae,
                           artifact=art, is_hybrid=is_hybrid, merged_lora_pairs=merged,
                           external_loras=external_records, ablated=ablated,
-                          fp8_linears=len(fp8_handle), softmax_backend=softmax_backend)
+                          fp8_linears=fp8_linears, softmax_backend=softmax_backend)
 
 
 def render_record(cfg, model: InferenceModel) -> Dict[str, Any]:

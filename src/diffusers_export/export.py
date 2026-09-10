@@ -340,6 +340,9 @@ def write_config(checkpoint_dir: str, out_dir: str, base_source: str, base_subfo
             "adapters": adapters,
             "inference_kernels": True,
             "softmax_backend": "auto",
+            # Stated, and false: fp8 changes the sample, so it is never a default. A
+            # caller opts in with `fp8=True`; this is what that overrides.
+            "fp8": False,
         },
     }
     path = os.path.join(out_dir, "config.json")
