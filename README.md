@@ -101,10 +101,8 @@ out = pipe(prompt=prompt, num_frames=345, num_inference_steps=9,
 
 Use `workflow="fl2va"` to pass `image` and `last_image` keyframes instead. Here
 `num_inference_steps` counts sigma grid points, so 9 of them is 8 model evaluations.
-On one GPU neither the offload nor its margin is optional: the text encoder is 62 GB and
-the transformer 66 GB, and the 3 GB default margin only asks whether weights fit -- on a
-140 GB card both do, so nothing is ever offloaded. 40 GB is the room the working set
-needs; 345 frames of packed sequence peak at 85 GB.
+The offload is not optional on one GPU: the text encoder is 62 GB and the transformer
+66 GB. Neither is its margin -- the default is far too small for the working set.
 
 Or as a script, keyframes included:
 
