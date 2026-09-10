@@ -15,9 +15,15 @@ infer_ulysses.py -- those are the fast stack (fp8, the decomposed window kernel,
 Ulysses); this is the portable one, single-GPU bf16.
 
 Two things are not optional on one GPU. `workflow=` keeps the unused 61.7 GB
-transformer partition from being fetched, and the offload is what lets the 66 GB
-transformer and the 66 GB Qwen3-VL text encoder share a card: whichever is not running
+transformer partition from being fetched, and the offload is what lets the 62 GB
+Qwen3-VL text encoder and the 66 GB transformer share a card: whichever is not running
 sits on the CPU.
+
+`memory_reserve_margin` is part of that offload rather than a tuning knob. The strategy
+asks only whether the incoming model's *weights* fit, and at the 3 GB default both do
+fit on a 140 GB card at once -- so it offloads nothing, ever, and denoising starts with
+10 GB of room and dies in the first block. 40 GB is what sends the text encoder back to
+the CPU before the transformer runs; 345 frames then peak at 85 GB.
 """
 import argparse
 import os
@@ -43,11 +49,10 @@ def main():
     p.add_argument("--steps", type=int, default=8,
                    help="model evaluations (NFE). The scheduler counts sigma grid "
                         "points, one more than that, and this passes the +1 for you")
-    p.add_argument("--frames", type=int, default=209,
-                   help="snapped up to the next 17n+5; 5 to 15 seconds at 24 fps. "
-                        "8.7 seconds is what one 140 GB GPU holds on this path -- the "
-                        "14.4 of the reported numbers needs the room fp8 buys, and 345 "
-                        "frames of packed sequence runs out of memory in bf16")
+    p.add_argument("--frames", type=int, default=345,
+                   help="snapped up to the next 17n+5; 5 to 15 seconds at 24 fps. The "
+                        "default is the 14.4 seconds the reported numbers use, which "
+                        "one 140 GB GPU holds in bf16 with room to spare")
     p.add_argument("--transformer", default=None,
                    help="a checkpoint's diffusers/ subfolder. Default: whatever the "
                         "repository's index names, the 8-step model")
@@ -77,7 +82,7 @@ def main():
     if args.transformer:
         load_kwargs["subfolder"] = {"transformer": args.transformer}
     pipe.load_components(**load_kwargs)
-    manager.enable_auto_cpu_offload(device=args.device)
+    manager.enable_auto_cpu_offload(device=args.device, memory_reserve_margin="40GB")
 
     videos, audio, rate = pipe(
         prompt=prompt,

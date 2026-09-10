@@ -93,16 +93,18 @@ manager = ComponentsManager()
 pipe = ModularPipeline.from_pretrained("OpenVDN/vdn-minimax-h3", workflow="t2va",
                                        components_manager=manager, collection="vdn")
 pipe.load_components(trust_remote_code=True, torch_dtype=torch.bfloat16)
-manager.enable_auto_cpu_offload(device="cuda")
+manager.enable_auto_cpu_offload(device="cuda", memory_reserve_margin="40GB")
 
-out = pipe(prompt=prompt, num_frames=124, num_inference_steps=9,
+out = pipe(prompt=prompt, num_frames=345, num_inference_steps=9,
            output=["videos", "audio", "sampling_rate"])
 ```
 
 Use `workflow="fl2va"` to pass `image` and `last_image` keyframes instead. Here
 `num_inference_steps` counts sigma grid points, so 9 of them is 8 model evaluations.
-The offload is not optional on one GPU: the transformer and the Qwen3-VL text encoder
-are 66 GB each.
+On one GPU neither the offload nor its margin is optional: the text encoder is 62 GB and
+the transformer 66 GB, and the 3 GB default margin only asks whether weights fit -- on a
+140 GB card both do, so nothing is ever offloaded. 40 GB is the room the working set
+needs; 345 frames of packed sequence peak at 85 GB.
 
 Or as a script, keyframes included:
 
