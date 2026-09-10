@@ -29,6 +29,7 @@ import json
 import os
 import re
 import shutil
+import sys
 
 REPO_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 ENTRY = "src/diffusers_export/modeling.py"
@@ -43,12 +44,33 @@ _IMPORT = re.compile(r"^\s*import\s+src\.", re.M)
 _LOADER_SEES = re.compile(r"^\s*from\s+\.(\S+)\s+import", re.M)
 
 
-def flat_name(dotted: str) -> str:
-    """`src.models.linear_attention.branch` -> `vdn_models_linear_attention_branch`.
-    Flat because the Hub's dynamic module loader resolves a relative import against
-    the entrypoint's own directory: a real subpackage would fetch its siblings from
-    the wrong level."""
-    return "vdn_" + dotted[len("src."):].replace(".", "_")
+# The merged file's sections, in reading order: the shared vocabulary first, then the
+# primitives, then each branch bottom-up, then the layer that joins them, and the model
+# class last. `validate_order` checks this is a legal definition order, so a new
+# dependency that breaks the layout fails the export instead of the import.
+SECTIONS = (
+    "src.checkpoints.key_mapping",
+    "src.models.sequence_layout",
+    "src.models.attention_gates",
+    "src.models.ops.rms_norm",
+    "src.models.ops.temporal_conv",
+    "src.models.ops.fp8_linear",
+    "src.models.ops.fused_block",
+    "src.models.linear_attention.kernels",
+    "src.models.linear_attention.delta_rule",
+    "src.models.linear_attention.features",
+    "src.models.linear_attention.layers",
+    "src.models.linear_attention.scan",
+    "src.models.linear_attention.branch",
+    "src.models.softmax_attention.kernels",
+    "src.models.softmax_attention.window",
+    "src.models.softmax_attention.flex_attention",
+    "src.models.softmax_attention.decomposed",
+    "src.models.softmax_attention.dense_processor",
+    "src.models.hybrid_attention",
+    "src.models.hybrid_transform",
+    "src.inference.utils.lora",
+)
 
 
 def source_of(dotted: str):
@@ -60,6 +82,15 @@ def source_of(dotted: str):
     return None
 
 
+def src_imports(text: str):
+    """(module, node) for every real `from src.x import ...` statement. AST, not a
+    regex: the same spelling inside a docstring is prose, and one module's docstring
+    does name its own module in a usage example."""
+    return [(node.module, node) for node in ast.walk(ast.parse(text))
+            if isinstance(node, ast.ImportFrom) and not node.level
+            and node.module and node.module.startswith("src.")]
+
+
 def closure(entry: str):
     """Every `src.` module reachable from `entry`, as {dotted: file}."""
     found, queue = {}, [entry]
@@ -67,8 +98,8 @@ def closure(entry: str):
         path = queue.pop()
         text = open(path).read()
         if _IMPORT.search(text):
-            raise SystemExit(f"{path}: `import src.x` cannot be rewritten to a relative "
-                             "import; use `from src.x import y`")
+            raise SystemExit(f"{path}: `import src.x` cannot be merged; use "
+                             "`from src.x import y`")
         for dotted, _ in src_imports(text):
             if dotted in found:
                 continue
@@ -80,87 +111,188 @@ def closure(entry: str):
     return found
 
 
-def src_imports(text: str):
-    """(module, line number) for every real `from src.x import ...` statement. AST, not
-    a regex: the same spelling inside a docstring is prose, and rewriting it would put a
-    relative import where the Hub's loader can see one that no import graph explains."""
-    out = []
-    for node in ast.walk(ast.parse(text)):
-        if (isinstance(node, ast.ImportFrom) and not node.level
-                and node.module and node.module.startswith("src.")):
-            out.append((node.module, node.lineno))
+def is_reexport(path: str) -> bool:
+    """A package `__init__.py` that only re-exports. It carries nothing into a merged
+    file, where every name is already module-global."""
+    body = ast.parse(open(path).read()).body
+    return all(isinstance(n, (ast.Import, ast.ImportFrom)) or
+               (isinstance(n, ast.Expr) and isinstance(n.value, ast.Constant))
+               for n in body)
+
+
+def validate_order(modules, order):
+    """Every module must come after the ones it imports. Class bases, decorators and
+    default arguments are evaluated when the definition runs, so this is correctness,
+    not taste -- the reading order above just has to also be a legal one."""
+    missing = set(modules) - set(order)
+    if missing:
+        raise SystemExit(f"SECTIONS does not place {sorted(missing)}")
+    rank = {name: i for i, name in enumerate(order)}
+    for dotted, path in modules.items():
+        for needed, _ in src_imports(open(path).read()):
+            if needed in rank and rank[needed] > rank[dotted]:
+                raise SystemExit(f"SECTIONS puts {needed} after {dotted}, which needs "
+                                 "it defined first")
+
+
+def top_level(text: str):
+    """Module docstring, `src.` imports, other imports, and everything else."""
+    tree = ast.parse(text)
+    doc, rest = None, list(tree.body)
+    if rest and isinstance(rest[0], ast.Expr) and isinstance(rest[0].value, ast.Constant) \
+            and isinstance(rest[0].value.value, str):
+        doc, rest = rest[0], rest[1:]
+    drop, imports = [], []
+    for node in rest:
+        if isinstance(node, ast.ImportFrom) and not node.level and node.module \
+                and node.module.startswith("src."):
+            drop.append(node)
+        elif isinstance(node, (ast.Import, ast.ImportFrom)):
+            imports.append(node)
+    return doc, drop, imports, rest
+
+
+def bindings(nodes):
+    """Module-level name -> its defining node, for collision detection."""
+    out = {}
+    for node in nodes:
+        if isinstance(node, (ast.ClassDef, ast.FunctionDef, ast.AsyncFunctionDef)):
+            out[node.name] = node
+        elif isinstance(node, ast.Assign):
+            for target in node.targets:
+                if isinstance(target, ast.Name):
+                    out[target.id] = node
+        elif isinstance(node, ast.AnnAssign) and isinstance(node.target, ast.Name):
+            out[node.target.id] = node
     return out
 
 
-def rewrite(text: str, names) -> str:
+def rename(text: str, old: str, new: str) -> str:
+    """Rewrite every reference to a module-level name, by AST position. Positional so
+    that the same word in a comment or a docstring is left alone."""
+    spots = []
+    for node in ast.walk(ast.parse(text)):
+        if isinstance(node, ast.Name) and node.id == old:
+            spots.append((node.lineno, node.col_offset))
+        elif isinstance(node, (ast.ClassDef, ast.FunctionDef, ast.AsyncFunctionDef)) \
+                and node.name == old:
+            line = text.splitlines()[node.lineno - 1]
+            spots.append((node.lineno, line.index(old, node.col_offset)))
     lines = text.splitlines(keepends=True)
-    for dotted, lineno in src_imports(text):
-        if dotted not in names:
-            raise SystemExit(f"unmapped import {dotted!r}")
-        lines[lineno - 1] = re.sub(rf"from\s+{re.escape(dotted)}\s+import",
-                                   f"from .{names[dotted]} import", lines[lineno - 1])
+    for lineno, col in sorted(spots, reverse=True):
+        line = lines[lineno - 1]
+        lines[lineno - 1] = line[:col] + new + line[col + len(old):]
     return "".join(lines)
 
 
-def check_graph(out_dir: str, written):
-    """Read the output back the way diffusers reads it, and refuse a graph it cannot
-    walk: a missing file, or a cycle (which its recursion does not terminate on --
-    the guard it uses to stop tests a path without the `.py` it later appends)."""
-    graph = {}
-    for name in written:
-        text = open(os.path.join(out_dir, name)).read()
-        graph[name[:-3]] = sorted(set(_LOADER_SEES.findall(text)))
-        for target in graph[name[:-3]]:
-            if not os.path.isfile(os.path.join(out_dir, target + ".py")):
-                raise SystemExit(f"{name}: relative import of {target!r}, which is not "
-                                 "a file here")
-
-    def walk(node, path):
-        if node in path:
-            raise SystemExit("import cycle the Hub loader would recurse on forever: "
-                             + " -> ".join(path[path.index(node):] + [node]))
-        for child in graph.get(node, ()):
-            walk(child, path + [node])
-
-    for node in graph:
-        walk(node, [])
+def strip(text: str, nodes) -> str:
+    """`text` without those top-level nodes, comments and spacing otherwise intact."""
+    cut = set()
+    for node in nodes:
+        cut.update(range(node.lineno, (node.end_lineno or node.lineno) + 1))
+    return "".join(line for n, line in enumerate(text.splitlines(keepends=True), 1)
+                   if n not in cut)
 
 
-def manifest(modules) -> str:
-    """Name every vendored module from the entrypoint.
+def banner(dotted: str, doc) -> str:
+    """A module's docstring becomes the section header it already was."""
+    rule = "# " + "=" * 76
+    body = "\n".join(f"# {line}".rstrip()
+                      for line in (doc.value.value.strip().splitlines() if doc else []))
+    return f"\n\n{rule}\n# {dotted}\n{rule}\n{body}\n\n" if body else \
+           f"\n\n{rule}\n# {dotted}\n{rule}\n\n"
 
-    diffusers resolves remote code differently for the two sources: from a Hub repo it
-    recurses through relative imports and fetches the whole graph, but from a LOCAL
-    directory it copies only the imports the entrypoint itself declares. Naming them all
-    here is what makes `from_pretrained(<a downloaded directory>)` work too. `__doc__`
-    because the import must bind something and that binding must not shadow anything.
-    """
-    lines = "\n".join(f"from .{module} import __doc__ as _  # noqa: F401"
-                       for module in modules)
-    return ("\n\n# Every module this component needs, named here so a LOCAL directory load\n"
-            "# copies them all; see src/diffusers_export/export.py:manifest.\n"
-            f"{lines}\n")
+
+def collect(imports, nodes):
+    """Gather import statements across modules: `import x` by its binding, `from x
+    import ...` merged per module, so the same name imported twice appears once."""
+    for node in nodes:
+        if isinstance(node, ast.Import):
+            for alias in node.names:
+                imports["plain"].add((alias.name, alias.asname))
+        else:
+            names = imports["from"].setdefault(node.module, set())
+            names.update((alias.name, alias.asname) for alias in node.names)
+
+
+def render_imports(imports) -> str:
+    """The standard library first, then everything else, each block sorted."""
+    def spell(name, asname):
+        return f"{name} as {asname}" if asname else name
+
+    lines = {True: [], False: []}
+    for name, asname in imports["plain"]:
+        lines[name.split(".")[0] in sys.stdlib_module_names].append(
+            f"import {spell(name, asname)}")
+    for module, names in imports["from"].items():
+        spelled = ", ".join(spell(*n) for n in sorted(names))
+        lines[module.split(".")[0] in sys.stdlib_module_names].append(
+            f"from {module} import {spelled}")
+    return "\n".join(sorted(lines[True])) + "\n\n" + "\n".join(sorted(lines[False])) + "\n"
+
+
+def merge(entry: str, modules) -> str:
+    """One file, because the Hub's loader is only reliable with one. Multi-file remote
+    code costs an explicit manifest (its local-directory path copies the entrypoint's
+    own imports and no deeper), a cycle check (its de-duplication tests a path without
+    the `.py` it appends, so it never fires), and the docstring hazard above. None of
+    that exists when there are no relative imports left to resolve."""
+    validate_order(modules, SECTIONS)
+    order = [name for name in SECTIONS if name in modules]
+
+    seen, imports, chunks = {}, {"plain": set(), "from": {}}, []
+    for dotted in order:
+        text = open(modules[dotted]).read()
+
+        # Two modules may define the same module-level name. Identical definitions are
+        # kept once; different ones are a collision the merge has to break, and it is
+        # the later module that gives way.
+        drop_duplicate = []
+        for name, node in bindings(top_level(text)[3]).items():
+            if name not in seen:
+                seen[name] = ast.dump(node)
+            elif ast.dump(node) == seen[name]:
+                drop_duplicate.append(name)
+            else:
+                text = rename(text, name,
+                              f"_{dotted.split('.')[-1]}_{name.lstrip('_')}")
+
+        doc, drop_src, module_imports, rest = top_level(text)
+        collect(imports, module_imports)
+
+        drop = list(drop_src) + ([doc] if doc else [])
+        duplicates = bindings(rest)
+        drop += [duplicates[name] for name in drop_duplicate]
+        chunks.append(banner(dotted, doc) + strip(text, drop).strip("\n") + "\n")
+
+    entry_text = open(entry).read()
+    doc, drop_src, module_imports, _ = top_level(entry_text)
+    collect(imports, module_imports)
+
+    contents = "\n".join(f"    {i:2d}. {name}" for i, name in enumerate(order, 1))
+    header = doc.value.value.strip() if doc else ""
+    body = strip(entry_text, list(drop_src) + ([doc] if doc else []))
+    return ('"""' + header + "\n\nGENERATED by src/diffusers_export/export.py -- edit "
+            "that, or the modules it merges, never this file.\n\nSections, in order:\n"
+            + contents + '\n"""\n' + render_imports(imports) + "\n"
+            + "".join(chunks) + banner(ENTRY_MODULE, None)
+            + body.strip("\n") + "\n")
 
 
 def write_code(out_dir: str):
     entry = os.path.join(REPO_ROOT, ENTRY)
-    modules = closure(entry)
-    names = {dotted: flat_name(dotted) for dotted in modules}
-    collisions = {n for n in names.values() if list(names.values()).count(n) > 1}
-    if collisions:
-        raise SystemExit(f"flattened name collision: {sorted(collisions)}")
+    modules = {d: p for d, p in closure(entry).items() if not is_reexport(p)}
+    text = merge(entry, modules)
 
-    written = [f"{ENTRY_MODULE}.py"]
-    with open(os.path.join(out_dir, written[0]), "w") as f:
-        f.write(rewrite(open(entry).read(), names))
-        f.write(manifest(sorted(names.values())))
-    for dotted, source in sorted(modules.items()):
-        written.append(names[dotted] + ".py")
-        with open(os.path.join(out_dir, written[-1]), "w") as f:
-            f.write(rewrite(open(source).read(), names))
+    ast.parse(text)
+    left = _LOADER_SEES.findall(text)
+    if left:
+        raise SystemExit(f"merged file still has relative imports: {sorted(set(left))}")
 
-    check_graph(out_dir, written)
-    return written
+    name = f"{ENTRY_MODULE}.py"
+    with open(os.path.join(out_dir, name), "w") as f:
+        f.write(text)
+    return [name], len(modules), text.count("\n")
 
 
 def write_config(checkpoint_dir: str, out_dir: str, base_source: str, base_subfolder: str):
@@ -238,10 +370,11 @@ def main():
         shutil.rmtree(args.out_dir)
     os.makedirs(args.out_dir)
 
-    written = write_code(args.out_dir)
+    written, sections, lines = write_code(args.out_dir)
     adapters = write_config(checkpoint, args.out_dir, args.base_source or args.repo,
                             args.base_subfolder)
-    print(f"{args.out_dir}: {len(written)} modules, {adapters} adapters referenced")
+    print(f"{args.out_dir}: {written[0]}, {sections} modules merged into "
+          f"{lines} lines, {adapters} adapters referenced")
 
     if args.index:
         write_index(os.path.join(os.path.dirname(checkpoint), args.base_index),

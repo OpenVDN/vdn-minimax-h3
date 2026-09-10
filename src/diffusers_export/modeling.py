@@ -1,10 +1,12 @@
 """The VDN-H3 transformer as a plain diffusers component.
 
-This is the SOURCE of the remote code published under each checkpoint's `diffusers/`
-directory on the Hub; `src/diffusers_export/export.py` copies it there together with the
-`src.models` closure it imports, rewriting every `src.` import to a flat relative one.
-Nothing here is imported by this repository's own inference stack -- `assemble.py`
-remains the one assembly path for `infer.py` and `infer_ulysses.py`.
+This is the LAST section of the remote code published under each checkpoint's
+`diffusers/` directory on the Hub. `src/diffusers_export/export.py` concatenates the
+`src.models` closure this file imports, in reading order, and appends what is below as
+one `modeling_vdn_h3.py` -- one file, since diffusers' loader resolves multi-file remote
+code reliably only from a Hub repo. Nothing here is imported by this repository's own
+inference stack: `assemble.py` remains the one assembly path for `infer.py` and
+`infer_ulysses.py`.
 
     AutoModel.from_pretrained("OpenVDN/vdn-minimax-h3",
                               subfolder="stage-dmd-step-250/diffusers",
