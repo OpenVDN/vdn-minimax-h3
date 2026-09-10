@@ -82,8 +82,8 @@ bash scripts/setup_diffusers.sh
 
 ### Load it with Diffusers
 
-The released checkpoints are also Modular Diffusers components, so a render needs no
-clone and no patched `diffusers`:
+The quickest way to a first render. The released checkpoints are Modular Diffusers
+components, so this needs no clone, no download and no patched `diffusers`:
 
 ```python
 import torch
@@ -112,14 +112,15 @@ python src/inference/infer_diffusers.py "a prompt" \
     --first prompts/image/first.png --last prompts/image/last.png
 ```
 
-This path is single-GPU bf16, and it is the quickest way to see the model rather
-than the fastest way to run it. The fp8 and Ulysses stack below is where the speeds
-in [Results](#results) come from.
+It is single-GPU bf16 throughout, and it pulls what it needs from the Hub as it
+goes.
 
 ### Download the weights
 
-Download everything (about 82 GB) into `ckpts/` from
-[Hugging Face](https://huggingface.co/OpenVDN/vdn-minimax-h3) using
+To render through this repository's own stack instead -- fp8, the tuned kernels, and
+Ulysses across eight GPUs, which is where the numbers in [Results](#results) come from
+-- download everything (about 82 GB) from
+[Hugging Face](https://huggingface.co/OpenVDN/vdn-minimax-h3) into `ckpts/` using
 
 ```bash
 hf download OpenVDN/vdn-minimax-h3 --local-dir ckpts
