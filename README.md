@@ -82,8 +82,8 @@ bash scripts/setup_diffusers.sh
 
 ### Load it with Diffusers
 
-The quickest way to a first render. The released checkpoints are Modular Diffusers
-components, so this needs no clone, no download and no patched `diffusers`:
+The quickest way to a first render is using diffusers, as we already release the
+checkpoints as modular diffusers components:
 
 ```python
 import torch
@@ -104,16 +104,13 @@ Use `workflow="fl2va"` to pass `image` and `last_image` keyframes instead. Here
 The offload is not optional on one GPU: the transformer and the Qwen3-VL text encoder
 are 66 GB each.
 
-The same thing as a runnable file, keyframes included:
+Or as a script, keyframes included:
 
 ```bash
 python src/inference/infer_diffusers.py "a prompt" --out results/diffusers.mp4
 python src/inference/infer_diffusers.py "a prompt" \
     --first prompts/image/first.png --last prompts/image/last.png
 ```
-
-It is single-GPU bf16 throughout, and it pulls what it needs from the Hub as it
-goes.
 
 ### Download the weights
 
@@ -143,7 +140,7 @@ ckpts/
 
 ### Your first render
 
-The simplest way to start is by running the model on a single GPU:
+Then, run the following script:
 
 ```bash
 bash scripts/inference/8nfe_tuned_fp8.sh
