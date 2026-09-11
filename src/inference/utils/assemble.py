@@ -138,8 +138,7 @@ def build_inference_model(cfg, device, *, load_decoders: bool = True,
     if cfg.precision.fp8.enabled:
         fp8_linears = convert_linear_to_fp8(
             transformer, skip_end_blocks=cfg.precision.fp8.skip_end_blocks)
-        say(f"fp8: {fp8_linears} Linears quantised -- same seed will NOT "
-            f"reproduce a bf16 render", flush=True)
+        say(f"fp8: {fp8_linears} Linears quantised", flush=True)
 
     return InferenceModel(transformer=transformer, vae=vae, audio_vae=audio_vae,
                           artifact=art, is_hybrid=is_hybrid, merged_lora_pairs=merged,
