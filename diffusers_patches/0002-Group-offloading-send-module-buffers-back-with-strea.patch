@@ -1,7 +1,7 @@
-From 1957b8bb19156204f89e31c16e8d5cd368b17b10 Mon Sep 17 00:00:00 2001
+From 0f8126506cd13809520df6d993f3ac59a09a04b8 Mon Sep 17 00:00:00 2001
 From: VDN-H3 Authors <vdn-h3@users.noreply.github.com>
 Date: Fri, 11 Sep 2026 10:18:57 +0000
-Subject: [PATCH 3/3] Group offloading: send module buffers back with streams
+Subject: [PATCH 2/2] Group offloading: send module buffers back with streams
 
 With use_stream=True a ModuleGroup onloads every group module's parameters AND buffers,
 and keeps a CPU copy of both in cpu_param_dict -- but _offload_to_memory pointed only the

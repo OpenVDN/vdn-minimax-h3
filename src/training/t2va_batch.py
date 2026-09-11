@@ -38,11 +38,11 @@ def few_step_timesteps(num_steps: int, video_shift: float,
                        audio_shift: float) -> tuple[torch.Tensor, torch.Tensor]:
     """The exact paired model-evaluation times used by MiniMaxH3Scheduler.
 
-    ``num_steps`` is the model-evaluation count (NFE). The scheduler builds one extra
-    terminal clean sigma for the final Euler update, so an 8-step schedule contains
-    eight paired forward times and nine sigma grid points. Keeping the formula here
-    beside ``sample_sigmas`` makes Stage-DMD's training support a discrete subset of the
-    same shifted flow path Stage-B samples continuously.
+    ``num_steps`` is the model-evaluation count (NFE). The scheduler counts sigma grid
+    points instead, the terminal clean one for the final Euler update included, so an
+    8-step schedule is nine grid points and eight paired forward times. Keeping the
+    formula here beside ``sample_sigmas`` makes Stage-DMD's training support a discrete
+    subset of the same shifted flow path Stage-B samples continuously.
     """
     if num_steps < 1:
         raise ValueError(f"few-step schedule needs num_steps >= 1, got {num_steps}")

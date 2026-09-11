@@ -115,10 +115,12 @@ def generate_latents(transformer, prompt_embeds, text_token_tags, num_frames, nu
             text_indices=text_indices,
         ))
 
+    # The scheduler counts sigma grid points, the terminal 0 included: one more than the
+    # num_steps model evaluations.
     scheduler = MiniMaxH3Scheduler(shift=video_shift)
     audio_scheduler = MiniMaxH3Scheduler(shift=audio_shift)
-    scheduler.set_timesteps(num_steps, device=device)
-    audio_scheduler.set_timesteps(num_steps, device=device)
+    scheduler.set_timesteps(num_steps + 1, device=device)
+    audio_scheduler.set_timesteps(num_steps + 1, device=device)
 
     generator = torch.Generator(device).manual_seed(seed)
     # The conditioning noise is drawn first, one draw per keyframe, before the generated
