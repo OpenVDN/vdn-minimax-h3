@@ -87,26 +87,24 @@ checkpoints as modular diffusers components:
 
 ```python
 import torch
-from diffusers import ComponentsManager, ModularPipeline
+from accelerate import cpu_offload_with_hook
+from diffusers import ModularPipeline
+from diffusers.hooks import apply_group_offloading
 
-manager = ComponentsManager()
-pipe = ModularPipeline.from_pretrained("OpenVDN/vdn-minimax-h3", workflow="t2va",
-                                       components_manager=manager, collection="vdn")
+pipe = ModularPipeline.from_pretrained("OpenVDN/vdn-minimax-h3", workflow="t2va")
 pipe.load_components(trust_remote_code=True, torch_dtype=torch.bfloat16)
-manager.enable_auto_cpu_offload(device="cuda", memory_reserve_margin="40GB")
 
-out = pipe(prompt=prompt, num_frames=345, num_inference_steps=9,
+apply_group_offloading(pipe.text_encoder, onload_device="cuda", offload_type="leaf_level",
+                       use_stream=True)
+_, vae = cpu_offload_with_hook(pipe.vae, execution_device="cuda")
+cpu_offload_with_hook(pipe.audio_vae, execution_device="cuda", prev_module_hook=vae)
+pipe.transformer.to("cuda")
+
+out = pipe(prompt="a prompt", num_frames=345, num_inference_steps=9,
            output=["videos", "audio", "sampling_rate"])
 ```
 
-Use `workflow="fl2va"` to pass `image` and `last_image` keyframes instead. Here
 `num_inference_steps` counts sigma grid points, so 9 of them is 8 model evaluations.
-The offload is not optional on one GPU: the text encoder is 62 GB and the transformer
-66 GB. Neither is its margin -- the default is far too small for the working set.
-
-`fp8={"transformer": True}` -- `--fp8` for the script below -- puts every wide Linear in
-fp8 e4m3: the transformer drops from 66 GB to 45 and the render peaks at 65 GB rather
-than 85.
 
 Or as a script, keyframes included:
 
@@ -116,8 +114,20 @@ python src/inference/infer_diffusers.py "a prompt" \
     --first prompts/image/first.png --last prompts/image/last.png
 ```
 
-On a 24 or 32 GB card add `--offload_dit`: the transformer then streams onto the GPU one
-block at a time, the only offload it runs under, and 345 frames peak at 20 GB.
+On a 24 or 32 GB card, stream the transformer in one block at a time: swap
+`pipe.transformer.to("cuda")` for the line below, or add `--offload_dit` to the script.
+345 frames then peak at 20 GB.
+
+```python
+apply_group_offloading(pipe.transformer, onload_device="cuda", offload_type="block_level",
+                       num_blocks_per_group=1, use_stream=True)
+```
+
+The transformer can be offloaded per model or per block, but not per leaf. Streaming it
+in fp8 (`--fp8`) also takes our
+[group-offloading patch](diffusers_patches/0002-Group-offloading-send-module-buffers-back-with-strea.patch),
+which `scripts/setup_diffusers.sh` applies; without it the fp8 weights pile up on the GPU
+until the card runs out of memory.
 
 ### Download the weights
 

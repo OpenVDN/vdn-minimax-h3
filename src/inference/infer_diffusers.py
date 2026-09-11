@@ -8,12 +8,12 @@
         --first prompts/image/first.png --last prompts/image/last.png
     python src/inference/infer_diffusers.py --offload_dit          # a 24 or 32 GB card
 
-This runs the README's `Load it with Diffusers` snippet, with each model's offload
-spelled out. Everything it renders comes from the Hub, so the patched diffusers that
-scripts/setup_diffusers.sh installs is the whole setup; the only thing it reads from here
-is the default prompt, and a prompt of your own replaces that. It deliberately shares NO
-code with infer.py and infer_ulysses.py -- those are the fast stack (fp8, the decomposed
-window kernel, Ulysses); this is the portable one, single-GPU bf16.
+This runs the README's `Load it with Diffusers` snippet. Everything it renders comes from
+the Hub, so the patched diffusers that scripts/setup_diffusers.sh installs is the whole
+setup; the only thing it reads from here is the default prompt, and a prompt of your own
+replaces that. It deliberately shares NO code with infer.py and infer_ulysses.py -- those
+are the fast stack (fp8, the decomposed window kernel, Ulysses); this is the portable
+one, single-GPU bf16.
 
 `workflow=` keeps the unused 61.7 GB transformer partition from being fetched. Every
 model but the transformer is offloaded, always: the 62 GB Qwen3-VL text encoder comes
@@ -40,8 +40,9 @@ DEFAULT_PROMPT = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(
 def offload(pipe, device, dit=False):
     """The text encoder streams in by layer. The decoders come in whole through
     accelerate's hook: the pipeline calls their `encode` and `decode`, and that is the
-    only hook those fire. With `dit` the transformer streams in by block -- the one
-    granularity it runs at -- and otherwise it stays on the GPU."""
+    only hook those fire. With `dit` the transformer streams in by block, and otherwise
+    it stays on the GPU. It offloads whole or by block, never by leaf: its fused kernels
+    read a child's weights without calling the child, so a leaf's hook never fires."""
     apply_group_offloading(pipe.text_encoder, onload_device=device, offload_device="cpu",
                            offload_type="leaf_level", use_stream=True)
     _, vae = cpu_offload_with_hook(pipe.vae, execution_device=device)
@@ -54,7 +55,7 @@ def offload(pipe, device, dit=False):
     if not dit:
         pipe.transformer.to(device)
         return
-    # fp8 keeps its weights in buffers; diffusers_patches/0003 is what sends a streamed
+    # fp8 keeps its weights in buffers; diffusers_patches/0002 is what sends a streamed
     # group's buffers back to the CPU along with its parameters.
     apply_group_offloading(pipe.transformer, onload_device=device, offload_device="cpu",
                            offload_type="block_level", num_blocks_per_group=1,
@@ -84,8 +85,8 @@ def main():
                         "to 43 and the GEMMs roughly double")
     p.add_argument("--offload_dit", action="store_true",
                    help="stream the transformer onto the GPU one block at a time, which "
-                        "a 24 or 32 GB card needs: 345 frames then peak at 20 GB. Block "
-                        "level is the only offload the transformer runs under")
+                        "a 24 or 32 GB card needs: 345 frames then peak at 20 GB. The "
+                        "transformer offloads whole or by block, never by leaf")
     p.add_argument("--seed", type=int, default=0)
     p.add_argument("--device", default="cuda")
     args = p.parse_args()
