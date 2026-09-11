@@ -1,0 +1,38 @@
+From 1957b8bb19156204f89e31c16e8d5cd368b17b10 Mon Sep 17 00:00:00 2001
+From: VDN-H3 Authors <vdn-h3@users.noreply.github.com>
+Date: Fri, 11 Sep 2026 10:18:57 +0000
+Subject: [PATCH 3/3] Group offloading: send module buffers back with streams
+
+With use_stream=True a ModuleGroup onloads every group module's parameters AND buffers,
+and keeps a CPU copy of both in cpu_param_dict -- but _offload_to_memory pointed only the
+parameters back at their CPU copies. Every buffer inside an offloaded group stayed on the
+accelerator, so block-level offload with streams gathered all of a model's buffers there.
+The non-stream path, module.to(offload_device), moves them with the parameters.
+
+VDN-H3's fp8 Linears keep their weights in buffers. Block-offloading the fp8 transformer
+with streams on a 24 GB card piled those weights up until it ran out of memory.
+
+Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>
+---
+ src/diffusers/hooks/group_offloading.py | 5 +++++
+ 1 file changed, 5 insertions(+)
+
+diff --git a/src/diffusers/hooks/group_offloading.py b/src/diffusers/hooks/group_offloading.py
+index 10d3f0c..28e73a6 100644
+--- a/src/diffusers/hooks/group_offloading.py
++++ b/src/diffusers/hooks/group_offloading.py
+@@ -322,6 +322,11 @@ class ModuleGroup:
+                         _restore_torchao_tensor(param, self.cpu_param_dict[param])
+                     else:
+                         param.data = self.cpu_param_dict[param]
++                for buffer in group_module.buffers():
++                    if _is_torchao_tensor(buffer):
++                        _restore_torchao_tensor(buffer, self.cpu_param_dict[buffer])
++                    else:
++                        buffer.data = self.cpu_param_dict[buffer]
+             for param in self.parameters:
+                 if _is_torchao_tensor(param):
+                     _restore_torchao_tensor(param, self.cpu_param_dict[param])
+-- 
+2.34.1
+
