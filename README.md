@@ -116,6 +116,9 @@ python src/inference/infer_diffusers.py "a prompt" \
     --first prompts/image/first.png --last prompts/image/last.png
 ```
 
+On a 24 or 32 GB card add `--offload_dit`: the transformer then streams onto the GPU one
+block at a time, the only offload it runs under, and 345 frames peak at 20 GB.
+
 ### Download the weights
 
 To render through this repository's own stack instead -- fp8, the tuned kernels, and

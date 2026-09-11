@@ -6,30 +6,27 @@
         --transformer stage-b-step-2000/diffusers
     python src/inference/infer_diffusers.py "a prompt" \
         --first prompts/image/first.png --last prompts/image/last.png
+    python src/inference/infer_diffusers.py --offload_dit          # a 24 or 32 GB card
 
-This is the README's `Load it with Diffusers` snippet as a runnable file. Everything it
-renders comes from the Hub, so `pip install diffusers` is the whole setup; the only
-thing it reads from here is the default prompt, and a prompt of your own replaces that.
-It deliberately shares NO code with infer.py and
-infer_ulysses.py -- those are the fast stack (fp8, the decomposed window kernel,
-Ulysses); this is the portable one, single-GPU bf16.
+This runs the README's `Load it with Diffusers` snippet, with each model's offload
+spelled out. Everything it renders comes from the Hub, so the patched diffusers that
+scripts/setup_diffusers.sh installs is the whole setup; the only thing it reads from here
+is the default prompt, and a prompt of your own replaces that. It deliberately shares NO
+code with infer.py and infer_ulysses.py -- those are the fast stack (fp8, the decomposed
+window kernel, Ulysses); this is the portable one, single-GPU bf16.
 
-Two things are not optional on one GPU. `workflow=` keeps the unused 61.7 GB
-transformer partition from being fetched, and the offload is what lets the 62 GB
-Qwen3-VL text encoder and the 66 GB transformer share a card: whichever is not running
-sits on the CPU.
-
-`memory_reserve_margin` is part of that offload rather than a tuning knob. The strategy
-asks only whether the incoming model's *weights* fit, and at the 3 GB default both do
-fit on a 140 GB card at once -- so it offloads nothing, ever, and denoising starts with
-10 GB of room and dies in the first block. 40 GB is what sends the text encoder back to
-the CPU before the transformer runs; 345 frames then peak at 85 GB.
+`workflow=` keeps the unused 61.7 GB transformer partition from being fetched. Every
+model but the transformer is offloaded, always: the 62 GB Qwen3-VL text encoder comes
+onto the GPU one layer at a time, and each decoder whole, while it runs. The transformer
+stays on the GPU unless `--offload_dit` streams it in one block at a time too.
 """
 import argparse
 import os
 
 import torch
-from diffusers import ComponentsManager, ModularPipeline
+from accelerate import cpu_offload_with_hook
+from diffusers import ModularPipeline
+from diffusers.hooks import apply_group_offloading
 from diffusers.utils.export_utils import encode_video
 
 REPO = "OpenVDN/vdn-minimax-h3"
@@ -38,6 +35,30 @@ FPS = 24
 # encoded from, so the default is that text rather than a second copy of it here.
 DEFAULT_PROMPT = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(
     os.path.abspath(__file__)))), "prompts", "example_0.pt")
+
+
+def offload(pipe, device, dit=False):
+    """The text encoder streams in by layer. The decoders come in whole through
+    accelerate's hook: the pipeline calls their `encode` and `decode`, and that is the
+    only hook those fire. With `dit` the transformer streams in by block -- the one
+    granularity it runs at -- and otherwise it stays on the GPU."""
+    apply_group_offloading(pipe.text_encoder, onload_device=device, offload_device="cpu",
+                           offload_type="leaf_level", use_stream=True)
+    _, vae = cpu_offload_with_hook(pipe.vae, execution_device=device)
+    cpu_offload_with_hook(pipe.audio_vae, execution_device=device, prev_module_hook=vae)
+
+    def decoder_back(module, args):
+        vae.offload()                 # fl2va encodes its keyframes before denoising
+
+    pipe.transformer.register_forward_pre_hook(decoder_back)
+    if not dit:
+        pipe.transformer.to(device)
+        return
+    # fp8 keeps its weights in buffers; diffusers_patches/0003 is what sends a streamed
+    # group's buffers back to the CPU along with its parameters.
+    apply_group_offloading(pipe.transformer, onload_device=device, offload_device="cpu",
+                           offload_type="block_level", num_blocks_per_group=1,
+                           use_stream=True)
 
 
 def main():
@@ -61,6 +82,10 @@ def main():
     p.add_argument("--fp8", action="store_true",
                    help="every wide Linear in fp8 e4m3: the weights drop from 62 GB "
                         "to 43 and the GEMMs roughly double")
+    p.add_argument("--offload_dit", action="store_true",
+                   help="stream the transformer onto the GPU one block at a time, which "
+                        "a 24 or 32 GB card needs: 345 frames then peak at 20 GB. Block "
+                        "level is the only offload the transformer runs under")
     p.add_argument("--seed", type=int, default=0)
     p.add_argument("--device", default="cuda")
     args = p.parse_args()
@@ -76,10 +101,7 @@ def main():
         if args.last:
             keyframes["last_image"] = load_image(args.last)
 
-    manager = ComponentsManager()
-    pipe = ModularPipeline.from_pretrained(
-        REPO, workflow="fl2va" if keyframes else "t2va",
-        components_manager=manager, collection="vdn")
+    pipe = ModularPipeline.from_pretrained(REPO, workflow="fl2va" if keyframes else "t2va")
 
     load_kwargs = {"trust_remote_code": True, "torch_dtype": torch.bfloat16}
     if args.transformer:
@@ -88,7 +110,7 @@ def main():
         # A dict keys a kwarg to one component; the text encoder would not know it.
         load_kwargs["fp8"] = {"transformer": True}
     pipe.load_components(**load_kwargs)
-    manager.enable_auto_cpu_offload(device=args.device, memory_reserve_margin="40GB")
+    offload(pipe, torch.device(args.device), dit=args.offload_dit)
 
     videos, audio, rate = pipe(
         prompt=prompt,
