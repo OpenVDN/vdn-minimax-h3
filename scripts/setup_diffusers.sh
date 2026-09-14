@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Fetch the diffusers this repo needs: upstream huggingface/diffusers at the pinned commit
-# plus the two MiniMax-H3 patches in diffusers_patches/, then install it editable.
+# plus the patches in diffusers_patches/, then install it editable.
 #
 #   bash scripts/setup_diffusers.sh            # -> ./diffusers, installed into the active env
 #   DIFFUSERS_DIR=/elsewhere bash scripts/setup_diffusers.sh

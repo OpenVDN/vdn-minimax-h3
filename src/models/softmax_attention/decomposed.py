@@ -13,11 +13,13 @@ group is a plain dense attention:
 Same math as the masked kernel -- each query's softmax spans exactly its kept set in
 one pass -- so outputs differ from flex by bf16 reduction order only (a few 1e-3
 relative, the same distance two flex backends show against each other). On sm100 the
-dense calls are markedly faster than the block-sparse flex kernel at this mask density.
+dense calls are markedly faster than the block-sparse flex kernel at this mask density;
+on sm90 the two run at the same speed.
 
-Inference-only and opt-in (config kernels.softmax_backend = decomposed, or auto on sm100;
-hybrid_transform.set_softmax_backend latches it before the first forward): training keeps
-the flex path.
+Inference-only (config kernels.softmax_backend = decomposed, and what auto resolves to on
+every CUDA device; hybrid_transform.set_softmax_backend writes the choice onto every
+hybrid layer): training keeps the flex path. No fallback: a failure here raises rather
+than silently downgrading to a slower kernel.
 """
 
 
@@ -29,42 +31,38 @@ from src.models.sequence_layout import SequenceLayout
 
 _PLAN_CACHE = {}
 MAX_CACHED_PLANS = 4
-_STATE = {}
 SOFTMAX_BACKENDS = ("auto", "flex", "decomposed", "ref")
+
+
+def fa4_varlen():
+    """The FA4 CuTe varlen kernel the window leg runs on, or an ImportError naming the
+    install that lacks it. Checked once at resolve time, not per forward."""
+    from flash_attn.cute.interface import flash_attn_varlen_func
+    return flash_attn_varlen_func
 
 
 def resolve_softmax_backend(backend: str) -> str:
     """Config ``kernels.softmax_backend`` -> the implementation that will run. ``auto``
-    is ``decomposed`` on sm100 only: the win is Blackwell-specific (on sm90 the flex
-    block-sparse path already runs close to its dense kernel, and the gather cost eats
-    the rest), so one YAML serves both architectures and sm90 inference stays on flex.
-    ``flex`` / ``decomposed`` force either kernel; ``ref`` is the eager reference for
-    parity/debug."""
+    is ``decomposed`` on every CUDA device: on sm100 it is the faster kernel, on sm90 it
+    matches flex at the production width and is the same distance from the fp32
+    reference (bf16 reduction order). So inference runs ONE window kernel on both
+    architectures, the exact window with no mask machinery; flex stays what training
+    uses. ``flex`` / ``decomposed`` force either kernel; ``ref`` is the eager reference
+    for parity/debug."""
     if backend not in SOFTMAX_BACKENDS:
         raise ValueError(f"kernels.softmax_backend={backend!r}; expected one of "
                          f"{SOFTMAX_BACKENDS}")
-    if backend != "auto":
-        return backend
-    on_sm100 = torch.cuda.is_available() and torch.cuda.get_device_capability(0)[0] >= 10
-    return "decomposed" if on_sm100 else "flex"
-
-
-def set_decomposition(enabled: bool) -> None:
-    """Process-level latch read by the flex path (hybrid_attention, ulysses): the
-    inference entrypoints set it through hybrid_transform.set_softmax_backend; training
-    never does, so the default state is OFF."""
-    _STATE["enabled"] = bool(enabled)
-
-
-def decomposition_enabled():
-    return bool(_STATE.get("enabled")) and not _STATE.get("disabled")
-
-
-def decomposition_state() -> dict:
-    """What actually ran, for the render record: the resolved switch and the
-    failure latch (mark_decomposition_broken)."""
-    return {"enabled": bool(_STATE.get("enabled")),
-            "latched_off": bool(_STATE.get("disabled"))}
+    if backend == "auto":
+        if not torch.cuda.is_available():
+            return "flex"
+        try:
+            fa4_varlen()
+        except ImportError:
+            return "flex"
+        return "decomposed"
+    if backend == "decomposed":
+        fa4_varlen()                      # raise now, with the install named, not mid-render
+    return backend
 
 
 class _Plan:
@@ -157,8 +155,7 @@ def window_softmax_decomposed(query, key, value, layout, bounds, scale,
     q is fine (indexing copies); strided k/v are copied contiguous up front --
     FA4 mis-addresses slice-strided operands on sm100, and gathers from a strided
     source are slower anyway, so one copy serves both legs. The dense-q leg runs on
-    cuDNN SDPA, which is faster than FA4 at this shape. Raises on failure; the
-    caller latches back to flex."""
+    cuDNN SDPA, which is faster than FA4 at this shape."""
     from flash_attn.cute.interface import flash_attn_varlen_func
 
     plan = _plan(layout, bounds, anchor_frames, query.device)
@@ -185,11 +182,3 @@ def window_softmax_decomposed(query, key, value, layout, bounds, scale,
         ow = ow[0] if isinstance(ow, tuple) else ow
         out[plan.win_q] = ow
     return out
-
-
-def mark_decomposition_broken(reason):
-    """Latch the decomposition off for the process, loudly, mirroring the FLASH
-    fallback: a slower window beats a dead render."""
-    _STATE["disabled"] = True
-    print("hybrid_attention: window decomposition failed; falling back to flex for "
-          f"the rest of the process. Reason: {reason}", flush=True)

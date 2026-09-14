@@ -5,6 +5,10 @@ Launch with ``torchrun --nproc_per_node=8 src/inference/infer_ulysses.py
 path is intentionally untouched. The rank layout, optimisation ladder, profiling and
 warm-up are the ``parallel.*`` / ``render.warmup_steps`` config fields -- no
 environment variable is read beyond torchrun's own LOCAL_RANK/WORLD_SIZE.
+
+t2va, i2va and fl2va all run here: the conditioning rows a keyframe cache adds sit
+outside the layout's video span, so they shard, gather and attend as ordinary global
+rows and no collective changes shape.
 """
 
 from __future__ import annotations
@@ -27,14 +31,14 @@ from src.config.inference import (
     validate_kernels,
     validate_parallel,
 )
-from src.inference.assemble import (
+from src.inference.utils.assemble import (
     build_inference_model,
     latents_path,
     render_record,
     write_json,
 )
-from src.inference.render import decode_and_save, generate_latents, load_decoders, load_text
-from src.inference.ulysses import init_ulysses, install_ulysses
+from src.inference.render import decode_and_save, generate_latents, load_decoders, load_prompt
+from src.inference.utils.ulysses import init_ulysses, install_ulysses
 
 
 _REQUEST_FIELDS = {
@@ -145,7 +149,8 @@ def main():
         offload_modules = []
 
     first_cfg = requests[0]
-    prompt_embeds, text_token_tags = load_text(first_cfg.render.prompt_file, str(device))
+    prompt_embeds, text_token_tags, conditions = load_prompt(first_cfg.render.prompt_file, str(device))
+
     runtime.barrier()
     torch.cuda.synchronize(device)
     model_setup_seconds = time.perf_counter() - process_started
@@ -163,6 +168,7 @@ def main():
             audio_shift=request_cfg.render.audio_shift,
             runtime=runtime,
             step_seconds=step_seconds,
+            conditions=conditions,
         )
 
     warmup_steps = cfg.render.warmup_steps
@@ -171,11 +177,11 @@ def main():
             print(f"warming up {warmup_steps} NFE in the measured process", flush=True)
         sample(first_cfg, warmup_steps)
 
-    del prompt_embeds, text_token_tags
+    del prompt_embeds, text_token_tags, conditions
 
     for request_index, request_cfg in enumerate(requests):
         request_started = time.perf_counter()
-        prompt_embeds, text_token_tags = load_text(
+        prompt_embeds, text_token_tags, conditions = load_prompt(
             request_cfg.render.prompt_file, str(device))
         runtime.reset_profile()
 
@@ -283,7 +289,7 @@ def main():
                     )
                     print(f"profile rank {rank}: {fields}", flush=True)
 
-        del prompt_embeds, text_token_tags, latents, audio_latents
+        del prompt_embeds, text_token_tags, conditions, latents, audio_latents
 
     dist.destroy_process_group()
 

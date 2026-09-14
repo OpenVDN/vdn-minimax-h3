@@ -54,7 +54,7 @@ def build_model(spec: Union[ModelSpec, Dict[str, Any]], device: str = "cpu",
     # Adapters are deliberately NOT injected here: the two consumers want different
     # things from the same spec. The B trainer wants live peft modules
     # (inject_adapters below); inference wants the adapter FOLDED into the base
-    # weights (src/inference/lora.merge_lora_state) so the render pays nothing for it.
+    # weights (src/inference/utils/lora.merge_lora_state) so the render pays nothing for it.
     return model
 
 

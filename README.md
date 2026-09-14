@@ -1,6 +1,6 @@
 # Video DeltaNet: Hybrid Attention to Speed Up Video Models with Near-Lossless Quality
 
-[[`Blog`](https://openvdn.github.io/)] [[`🤗 HuggingFace`](https://huggingface.co/OpenVDN/vdn-minimax-h3)] [[`License`](#license)]
+[[`Blog`](https://openvdn.github.io/)] [[`Code`](https://github.com/OpenVDN/vdn-minimax-h3)] [[`🤗 Weights`](https://huggingface.co/OpenVDN/vdn-minimax-h3)] [[`ModelScope`](https://www.modelscope.ai/models/OpenVDN/vdn-minimax-h3)] [[`License`](#license)]
 
 We release **VDN-Minimax-H3** (**VDN-H3**), a hybrid-attention model that
 generates video faster than it plays, powered by
@@ -22,16 +22,23 @@ We present some samples of generated videos here:
 
 <table>
 <tr>
-<td width="33%"><video src="https://github.com/user-attachments/assets/04aa614a-3ff3-43ab-a3fa-ed3f49e039ec" controls muted></video></td>
-<td width="33%"><video src="https://github.com/user-attachments/assets/7ac8d7dc-f635-4e3f-85da-89d681efdd52" controls muted></video></td>
-<td width="33%"><video src="https://github.com/user-attachments/assets/e3e9f30e-434e-4a0f-bb87-0ba5749abea4" controls muted></video></td>
+<td width="33%"><video src="https://github.com/user-attachments/assets/343d03e6-8d88-444d-b66c-19d9fb252b37" controls muted></video></td>
+<td width="33%"><video src="https://github.com/user-attachments/assets/9de4ffbc-1a38-4467-8c9e-c975d2b84fa1" controls muted></video></td>
+<td width="33%"><video src="https://github.com/user-attachments/assets/f0ec47d4-96ad-4fbb-8bc9-1b9d5eeb0b94" controls muted></video></td>
 </tr>
 <tr>
-<td width="33%"><video src="https://github.com/user-attachments/assets/811bb4d3-f036-45a7-8098-2752fdc5619d" controls muted></video></td>
-<td width="33%"><video src="https://github.com/user-attachments/assets/5f5ccfa6-5d88-4ac4-842a-774358432e28" controls muted></video></td>
-<td width="33%"><video src="https://github.com/user-attachments/assets/06dd0699-7047-4b25-bcb7-8b541a4e2718" controls muted></video></td>
+<td width="33%"><video src="https://github.com/user-attachments/assets/bf849387-03c6-45ef-988b-38164f27e88a" controls muted></video></td>
+<td width="33%"><video src="https://github.com/user-attachments/assets/2cc62303-1ebb-4d3f-a367-3c0125b11c3d" controls muted></video></td>
+<td width="33%"><video src="https://github.com/user-attachments/assets/2e0f43d3-4919-44c4-9f64-42d90d9e08b1" controls muted></video></td>
 </tr>
 </table>
+
+## News
+
+- **September 8, 2026:** We support I2VA, FL2VA and L2VA now with the same checkpoint.
+- **September 6, 2026:** We released the [VDN-H3 blog](https://openvdn.github.io/),
+  [training and inference code](https://github.com/OpenVDN/vdn-minimax-h3), and
+  [model weights](https://huggingface.co/OpenVDN/vdn-minimax-h3).
 
 ## Set up environment
 
@@ -73,12 +80,70 @@ bash scripts/setup_diffusers.sh
 
 ## Quick Start — Generate your own video
 
+### Load it with Diffusers
+
+The quickest way to a first render is using diffusers, as we already release the
+checkpoints as modular diffusers components:
+
+```python
+import torch
+from accelerate import cpu_offload_with_hook
+from diffusers import ModularPipeline
+from diffusers.hooks import apply_group_offloading
+
+pipe = ModularPipeline.from_pretrained("OpenVDN/vdn-minimax-h3", workflow="t2va")
+pipe.load_components(trust_remote_code=True, torch_dtype=torch.bfloat16)
+
+apply_group_offloading(pipe.text_encoder, onload_device="cuda", offload_type="leaf_level",
+                       use_stream=True)
+_, vae = cpu_offload_with_hook(pipe.vae, execution_device="cuda")
+cpu_offload_with_hook(pipe.audio_vae, execution_device="cuda", prev_module_hook=vae)
+pipe.transformer.to("cuda")
+
+out = pipe(prompt="a prompt", num_frames=345, num_inference_steps=9,
+           output=["videos", "audio", "sampling_rate"])
+```
+
+`num_inference_steps` counts sigma grid points, so 9 of them is 8 model evaluations.
+
+Or as a script, keyframes included:
+
+```bash
+python src/inference/infer_diffusers.py "a prompt" --out results/diffusers.mp4
+python src/inference/infer_diffusers.py "a prompt" \
+    --first prompts/image/first.png --last prompts/image/last.png
+```
+
+On a 24 or 32 GB card, stream the transformer in one block at a time: swap
+`pipe.transformer.to("cuda")` for the line below, or add `--offload_dit` to the script.
+345 frames then peak at 20 GB.
+
+```python
+apply_group_offloading(pipe.transformer, onload_device="cuda", offload_type="block_level",
+                       num_blocks_per_group=1, use_stream=True)
+```
+
+The transformer can be offloaded per model or per block, but not per leaf. Streaming it
+in fp8 (`--fp8`) also takes our
+[group-offloading patch](diffusers_patches/0002-Group-offloading-send-module-buffers-back-with-strea.patch),
+which `scripts/setup_diffusers.sh` applies; without it the fp8 weights pile up on the GPU
+until the card runs out of memory.
+
 ### Download the weights
 
-Download everything (about 82 GB) into `ckpts/` using
+To render through this repository's own stack instead -- fp8, the tuned kernels, and
+Ulysses across eight GPUs, which is where the numbers in [Results](#results) come from
+-- download everything (about 82 GB) from
+[Hugging Face](https://huggingface.co/OpenVDN/vdn-minimax-h3) into `ckpts/` using
 
 ```bash
 hf download OpenVDN/vdn-minimax-h3 --local-dir ckpts
+```
+
+or from [ModelScope](https://www.modelscope.ai/models/OpenVDN/vdn-minimax-h3) with
+
+```bash
+modelscope download --model OpenVDN/vdn-minimax-h3 --local_dir ckpts
 ```
 
 The layout will look like
@@ -90,9 +155,9 @@ ckpts/
   stage-dmd-step-250/  VDN-H3-8-step: the above + adapters/turbo/ · 5.1 GB
 ```
 
-### Your first render
+### Render a video
 
-The simplest way to start is by running the model on a single GPU:
+Then, run the following script:
 
 ```bash
 bash scripts/inference/8nfe_tuned_fp8.sh
@@ -122,6 +187,57 @@ We strongly recommend rewriting it first using
 or the official
 [prompt-writing skills](https://github.com/MiniMax-AI/MiniMax-H3/tree/main/skills)
 before encoding it. This can greatly improve the generated video quality.
+
+### Supporting FL2VA, I2VA, and L2VA
+
+The same checkpoints also generate from keyframes. We provide an FL2VA example in
+[prompts/image/](prompts/image/):
+
+<table>
+<tr>
+<td width="50%"><img src="prompts/image/first.png" alt="first keyframe"></td>
+<td width="50%"><img src="prompts/image/last.png" alt="last keyframe"></td>
+</tr>
+<tr>
+<td align="center"><code>prompts/image/first.png</code></td>
+<td align="center"><code>prompts/image/last.png</code></td>
+</tr>
+</table>
+
+Render it with:
+
+```bash
+python src/inference/infer.py \
+  --config configs/inference/8nfe_tuned_fp8.yaml \
+  checkpoint=ckpts/stage-dmd-step-250 \
+  render.prompt_file=prompts/image/example_fl2va.pt \
+  render.out=results/example_fl2va.mp4
+```
+
+and you should get something like this:
+
+<video src="https://github.com/user-attachments/assets/56728e17-9081-4f5a-b707-54de1cd8c166" controls muted></video>
+
+For your own keyframes, encode the prompt together with the images first:
+
+```bash
+python src/inference/encode_keyframes.py --prompt "..." \
+  --first first.png --last last.png --out prompts/image/mine.pt
+```
+
+`--first` alone is I2VA, `--last` alone is L2VA, both is FL2VA. Each mode wants its own
+instruction as the prompt's first line, given by MiniMax-H3's
+[prompt writing guide](https://huggingface.co/MiniMaxAI/MiniMax-H3/blob/main/docs/VIDEO_PROMPT_WRITING_GUIDE_base_en.md).
+
+The multi-GPU entrypoint takes the same prompt file:
+
+```bash
+torchrun --standalone --nproc_per_node=8 src/inference/infer_ulysses.py \
+  --config configs/inference/8nfe_tuned_fp8_ulysses_h200.yaml \
+  checkpoint=ckpts/stage-dmd-step-250 \
+  render.prompt_file=prompts/image/example_fl2va.pt \
+  render.out=results/example_fl2va.mp4
+```
 
 ### Choosing an inference configuration
 
@@ -186,15 +302,17 @@ part of it must move, `worker.transformer_cpu_offload_blocks=N` limits swapping 
 last `N` transformer blocks and reduces PCIe traffic. Start conservatively: too small a
 value can run out of memory during VAE decoding.
 
-Compact FP8 workers can additionally set `precision.fp8.keep_original=false` to drop
-the replaced BF16 Linear weights. This makes FP8 conversion non-reversible within the
-process, but substantially reduces resident memory and PCIe traffic. The default stays
-`true`, preserving the existing `revert_fp8` behavior.
+FP8 conversion uses the upstream one-way conversion, which releases the original
+BF16 weights. This worker does not add a separate reversible/compact FP8 mode.
+
+This mode accepts pre-encoded text or keyframe prompt caches. Each request reloads
+its own conditioning, so a text-only request cannot inherit prior keyframes.
+`render.num_steps` counts model evaluations, as in the native sampler.
 
 This mode expects pre-encoded prompt files. For an online deployment, keep prompt
 encoding and, where possible, VAE decoding outside the denoiser worker.
 
-Reference measurement by **wuyaole** on 8× RTX PRO 5000 72GB, using the released
+Historical measurement before the upstream integration by **wuyaole** on 8× RTX PRO 5000 72GB, using the released
 8-NFE checkpoint at 1344×768 and 345 frames:
 
 | rank-0 decode strategy | warm request | denoise | transformer swap |
@@ -205,8 +323,11 @@ Reference measurement by **wuyaole** on 8× RTX PRO 5000 72GB, using the release
 
 The numbers include VAE decoding and MP4 encoding but exclude the one-time model
 assembly and warm-up. Treat the block count as hardware- and workload-specific; the
-25-block result was verified on two consecutive requests, while the 20-block row is a
-single completed boundary run.
+25-block timing is retained for request index 1, while the 20-block row is a
+single completed boundary run. The retained first/second files belong to different
+offload configurations and do not independently prove a matched consecutive pair.
+These results do not validate the newly integrated upstream FP8 path; remeasure
+capacity before reusing the old offload block counts.
 
 ## Training Recipe
 
@@ -281,7 +402,11 @@ from its released transformer weights. We also thank
 [Diffusers](https://github.com/huggingface/diffusers),
 [FlashAttention](https://github.com/Dao-AILab/flash-attention), and
 [Triton](https://github.com/triton-lang/triton), on which the optimized inference path
-is built.
+is built. We thank [Kernel Design Agents (KDA)](https://github.com/mit-han-lab/kernel-design-agents)
+for kernel design support. We also thank
+[Flash Linear Attention (FLA)](https://github.com/fla-org/flash-linear-attention) and
+[FlexAttention](https://pytorch.org/docs/stable/nn.attention.flex_attention.html) for
+their open-source attention implementations.
 
 ## BibTeX
 

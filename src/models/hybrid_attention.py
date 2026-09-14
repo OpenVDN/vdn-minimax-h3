@@ -17,11 +17,12 @@ from diffusers.models.attention_dispatch import dispatch_attention_fn
 from diffusers.models.transformers.transformer_minimax_h3 import _apply_rotary_emb
 
 from src.models.attention_gates import OutputGate
-from src.models.sequence_layout import SequenceLayout  # noqa: F401  (re-export: layout consumers)
+from src.models.sequence_layout import SequenceLayout
 from src.models.linear_attention import BidirectionalLinearBranch
 from src.models.softmax_attention import (apply_softmax_gate, build_window_block_mask,
                                           window_bounds, window_softmax_flex,
                                           window_softmax_reference)
+from src.models.softmax_attention.decomposed import window_softmax_decomposed
 from src.models.softmax_attention.kernels import _qk_prep
 from src.models.ops.fp8_linear import Fp8Linear, quantize_activation
 from src.checkpoints.key_mapping import ANCHOR_FRAME_MODES
@@ -150,6 +151,29 @@ class HybridAttention(nn.Module):
 
         return out
 
+    def _window_kernel(self, inference, on_cuda):
+        """Which window-softmax kernel this forward runs. `softmax_impl` is the process-wide
+        choice (hybrid_transform.set_softmax_backend); the decomposition is inference-only,
+        training keeps the differentiable flex path."""
+        if not on_cuda or self.softmax_impl == "ref":
+            return "ref"
+        if self.softmax_impl == "decomposed" and inference:
+            return "decomposed"
+        return "flex"
+
+    def _window_softmax(self, query, key, value, layout, bounds, scale, inference):
+        kernel = self._window_kernel(inference, query.is_cuda)
+        if kernel == "decomposed":
+            return window_softmax_decomposed(query, key, value, layout, bounds, scale,
+                                             anchor_frames=self.anchor_frames)
+        if kernel == "flex":
+            block_mask = build_window_block_mask(layout, bounds, value.device,
+                                                 anchor_frames=self.anchor_frames)
+            return window_softmax_flex(query, key, value, block_mask, scale,
+                                       inference=inference)
+        return window_softmax_reference(query, key, value, layout, bounds, scale,
+                                        anchor_frames=self.anchor_frames)
+
     def _hybrid_forward(self, x, rotary_emb):
         layout = self.layout
         hybrid_inference = self.hybrid_inference_mode or self.inference_mode
@@ -159,8 +183,6 @@ class HybridAttention(nn.Module):
         scale = self.head_dim ** -0.5
 
         query, key, value, qkv_raw = self._qkv(x, rotary_emb)
-        use_flex = (not full_cover) and self.softmax_impl in ("flex", "decomposed") and x.is_cuda
-
         if full_cover:
             # A window wide enough to cover every frame IS the original attention, so go
             # through the stock processor's own dispatch rather than a bare SDPA call:
@@ -174,32 +196,9 @@ class HybridAttention(nn.Module):
             ).squeeze(0)
             # nothing lies outside the window, so the linear branch would double count
             linear_active = False
-        elif use_flex:
-            softmax_out = None
-            if hybrid_inference:
-                # softmax_impl "decomposed" (kernels.softmax_backend, auto on sm100):
-                # the mask as a union of dense calls. Any failure latches the process
-                # back to flex.
-                from src.models.softmax_attention.decomposed import (
-                    decomposition_enabled, mark_decomposition_broken,
-                    window_softmax_decomposed)
-                if decomposition_enabled():
-                    try:
-                        softmax_out = window_softmax_decomposed(
-                            query, key, value, layout, bounds, scale,
-                            anchor_frames=self.anchor_frames)
-                    except Exception as exc:  # noqa: BLE001 -- latch, never die
-                        mark_decomposition_broken(
-                            f"{type(exc).__name__}: {str(exc).splitlines()[0][:140]}")
-            if softmax_out is None:
-                block_mask = build_window_block_mask(layout, bounds, value.device,
-                                                     anchor_frames=self.anchor_frames)
-                softmax_out = window_softmax_flex(query, key, value, block_mask, scale,
-                                                   inference=hybrid_inference)
-            linear_active = True
         else:
-            softmax_out = window_softmax_reference(query, key, value, layout, bounds, scale,
-                                              anchor_frames=self.anchor_frames)
+            softmax_out = self._window_softmax(query, key, value, layout, bounds, scale,
+                                               hybrid_inference)
             linear_active = True
 
         # The roped q/k (and the flex output) are dead once the local branch is done;

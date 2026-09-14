@@ -3,6 +3,9 @@ ckpts/
 results/
 logs/
 
+# local-only helpers (weight staging, run wrappers); not part of the release
+scripts/local/
+
 __pycache__/
 *.pyc
 .claude/

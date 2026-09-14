@@ -1,17 +1,17 @@
 """Live PEFT handling for Stage-DMD's frozen-teacher/trainable-student Turbo pair.
 
-The external few-step adapter's weights are first translated by ``src.inference.lora``.
-This module then reroots dense attention targets through HybridAttention's ``attn.orig``
-wrapper, injects two named adapters with the checkpoint's mixed ranks, and keeps
-adapter switching independent of ``requires_grad`` after FSDP2 has sharded the
-parameters.
+The external few-step adapter's weights are first translated by
+``src.inference.utils.lora``. This module then reroots dense attention targets through
+HybridAttention's ``attn.orig`` wrapper, injects two named adapters with the checkpoint's
+mixed ranks, and keeps adapter switching independent of ``requires_grad`` after FSDP2 has
+sharded the parameters.
 """
 from collections import Counter
 
 from peft import LoraConfig, inject_adapter_in_model
 from peft.tuners.tuners_utils import BaseTunerLayer
 
-from src.inference.lora import load_external_lora
+from src.inference.utils.lora import load_external_lora
 
 
 def reroot_external_lora_state(model, state):
