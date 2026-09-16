@@ -56,11 +56,24 @@ def load_models(model_root: str, device: str, vae_source: str = None,
     return transformer, vae, audio_vae
 
 
+def load_decoders(vae_source: str, device: str):
+    """Load only the final decoders, optionally onto CPU for a persistent worker."""
+    vae_source = resolve_weights(vae_source or DEFAULT_MODEL_ROOT)
+    vae = AutoencoderKLMiniMaxH3.from_pretrained(vae_source, subfolder="vae").to(device)
+    audio_vae = AutoencoderKLMiniMaxH3Audio.from_pretrained(
+        vae_source, subfolder="audio_vae").to(device)
+    vae.eval().requires_grad_(False)
+    audio_vae.eval().requires_grad_(False)
+    return vae, audio_vae
+
+
+
 def load_prompt(prompt_file: str, device: str):
     """A prompt cache from encode_prompt.py (t2va) or encode_keyframes.py (i2va / fl2va);
     both carry prompt_embeds and text_token_tags. Returns (prompt_embeds,
     text_token_tags, conditions); `conditions` is (keyframe_anchors, condition_latents)
     for a keyframe cache, else None."""
+
     text = torch.load(prompt_file, map_location="cpu", weights_only=True)
     conditions = None
     if text.get("keyframe_anchors"):

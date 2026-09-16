@@ -1,0 +1,2 @@
+{"prompt_file":"prompts/first.pt","out":"results/first.mp4","seed":42,"record":true}
+{"prompt_file":"prompts/second.pt","out":"results/second.mp4","seed":43,"record":true}
