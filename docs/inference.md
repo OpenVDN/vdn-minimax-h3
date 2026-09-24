@@ -118,7 +118,7 @@ The fp8 configs fit an 80 GB card, on one GPU and on eight. Peak GPU memory in G
 | Denoise | 71.4 | 55.9 to 60.4 |
 | Decode | 67.8 | 68.5, rank 0 only |
 
-The decoders wait on the CPU and move to the GPU when denoising is over, and the fp8 conversion releases each bf16 weight as it goes, so the model never sits on the card twice. On one GPU the bf16 configs need more than 80 GB: 66 GiB of weights plus 26 GiB of transients.
+The decoders wait on the CPU and move to the GPU when denoising is over, and the fp8 conversion releases each bf16 weight as it goes, so the model never sits on the card twice. Assembly then returns the freed memory to the driver, where NCCL allocates its buffers at the first collective. On one GPU the bf16 configs need more than 80 GB: 66 GiB of weights plus 26 GiB of transients.
 
 The two encoders fit the same card: `encode_prompt.py` peaks at 63.2 GiB, and `encode_keyframes.py` with six references at 69.2.
 

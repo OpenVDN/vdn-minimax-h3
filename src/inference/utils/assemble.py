@@ -168,6 +168,11 @@ def build_inference_model(cfg, device, *, load_decoders: bool = True,
         fp8_linears = convert_linear_to_fp8(
             transformer, skip_end_blocks=cfg.precision.fp8.skip_end_blocks)
         say(f"fp8: {fp8_linears} Linears quantised", flush=True)
+        # The bf16 weights the conversion freed, about 20 GiB, stay in PyTorch's cache,
+        # where only PyTorch can reuse them. NCCL allocates its buffers outside that cache
+        # at the first collective of each communicator, so on an 80 GB card the eight-GPU
+        # render ran out of memory in its first all-to-all. Hand them back to the driver.
+        torch.cuda.empty_cache()
 
     return InferenceModel(transformer=transformer, vae=vae, audio_vae=audio_vae,
                           artifact=art, is_hybrid=is_hybrid, merged_lora_pairs=merged,
