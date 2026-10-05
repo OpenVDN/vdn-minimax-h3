@@ -1,6 +1,6 @@
 # Video DeltaNet: Hybrid Attention to Speed Up Video Models with Near-Lossless Quality
 
-[[`📄 Paper`](https://arxiv.org/abs/2609.20744)] [[`Blog`](https://openvdn.github.io/)] [[`Code`](https://github.com/OpenVDN/vdn-minimax-h3)] [[`🤗 Weights`](https://huggingface.co/OpenVDN/vdn-minimax-h3)] [[`ModelScope`](https://www.modelscope.ai/models/OpenVDN/vdn-minimax-h3)] [[`FreeVideo`](https://github.com/FlashML-org/FreeVideo)] [[`License`](#license)]
+[[`📄 Paper`](https://arxiv.org/abs/2609.20744)] [[`Blog`](https://openvdn.github.io/)] [[`Code`](https://github.com/OpenVDN/vdn-minimax-h3)] [[`🤗 Weights`](https://huggingface.co/OpenVDN/vdn-minimax-h3)] [[`ModelScope`](https://www.modelscope.ai/models/OpenVDN/vdn-minimax-h3)] [[`Local Inference`](https://github.com/FlashML-org/FreeVideo)] [[`License`](#license)]
 
 We release **VDN-Minimax-H3** (**VDN-H3**), a hybrid-attention model that generates video faster than it plays, powered by [MiniMax H3](https://huggingface.co/MiniMaxAI/MiniMax-H3). It offers these key features:
 
